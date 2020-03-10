@@ -1,13 +1,18 @@
+import logging
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import d2l
+import tqdm
 from mxnet import autograd, gluon, init, np, npx
 from mxnet.gluon import nn
-
-import tqdm
+from mxnet.gluon.utils import split_and_load
 
 npx.set_np()
+
+logging.basicConfig(format='[%(asctime)s] %(levelname)7s %(name)s: %(message)s')
+logger = logging.getLogger()
+logger.setLevel('INFO')
 
 # Hyper-parameters
 num_heads = 8
@@ -16,6 +21,8 @@ num_pred_hiddens = 512
 ffn_num_hiddens = 1024
 num_layers = 6
 dropout = 0.3
+batch_size = 32
+num_epochs = 20
 
 ### Class Declarations
 
@@ -66,7 +73,8 @@ def expand_hidden(feature):
     expand_feat = np.expand_dims(np.array(feature), axis=0)
     return np.broadcast_to(expand_feat.T, shape=(len(feature), num_hiddens))
 
-def load_data(file_path):
+def load_data(file_path, batch_size):
+    logger.info('Parsing file...')
     with open(file_path, 'r') as filep:
         next(filep) # Get rid of headers
 
@@ -86,6 +94,7 @@ def load_data(file_path):
             thrpts.append(float(tokens[-1]))
 
     # Expand featues to (batch, sequence, hidden)
+    logger.info('Expanding features...')
     with ProcessPoolExecutor(max_workers=8) as pool:
         expand_features = []
         for start in tqdm.tqdm(range(0, len(features), 8)):
@@ -95,73 +104,90 @@ def load_data(file_path):
             ]
             for future in as_completed(futures):
                 expand_features.append(future.result())
-        features = np.array(expand_features)
-
+        features = expand_features
 
     splitter = int(len(features) * 0.8)
     train_feats = np.array(features[:splitter])
     train_thrpts = np.array(thrpts[:splitter])
+    train_iter = gluon.data.DataLoader(
+        gluon.data.ArrayDataset(train_feats, train_thrpts),
+        batch_size,
+        shuffle=True,
+        num_workers=d2l.get_dataloader_workers())
     test_feats = np.array(features[splitter:])
     test_thrpts = np.array(thrpts[splitter:])
-    return train_feats, train_thrpts, test_feats, test_thrpts
+    return train_iter, test_feats, test_thrpts
 
 
 def get_batch_loss(net, loss, segments_X_shards, nsp_y_shards):
-    ls = []
-    for (segments_X_shard, nsp_y_shard) in zip(segments_X_shards, nsp_y_shards):
-        # Forward pass
-        nsp_Y_hat = net(segments_X_shard)
+    return loss(net(segments_X_shards)[1], nsp_y_shards)
 
-        # Compute prediction loss
-        nsp_l = loss(nsp_Y_hat, nsp_y_shard)
-        ls.append(nsp_l.mean())
-        npx.waitall()
-    return ls
+    # ls =[]
+    # for (segments_X_shard, nsp_y_shard) in zip(segments_X_shards, nsp_y_shards):
+    #     pred = net(segments_X_shard)
+    #     ls.append(loss(pred, nsp_y_shard).mean())
+
+    # ls = []
+    # nsp_Y_hats = net(segments_X_shards)[1]
+    # logger.info(nsp_y_shards)
+    # for (hat, shard) in zip(nsp_Y_hats, nsp_y_shards):
+    #     ls.append(loss(np.expand_dims(hat, axis=0), np.expand_dims(shard, axis=0)))
+    #return ls
 
 
-def train(train_feats, train_thrpts, batch_size, num_steps):
+def train(train_iter, ctx, num_epochs):
     net = BERTModel(num_hiddens, ffn_num_hiddens, num_heads, num_layers, dropout)
-    ctx = d2l.try_all_gpus()
     net.initialize(init.Xavier(), ctx=ctx)
-    loss = gluon.loss.SoftmaxCELoss()
+    logger.info('Model initialized on %s' % str(ctx))
+    loss = gluon.loss.L2Loss()
 
     trainer = gluon.Trainer(net.collect_params(), 'adam')
-    step, timer = 0, d2l.Timer()
+    epoch = 0
     metric = d2l.Accumulator(2)
-    num_steps_reached = False
-    while step < num_steps and not num_steps_reached:
-        for start in range(len(train_feats), batch_size):
-            segments_X_shards = train_feats[start:min(start + batch_size, len(train_feats))]
-            nsp_y_shards = train_thrpts[start:min(start + batch_size, len(train_feats))]
-            timer.start()
+    num_epochs_reached = False
+    while epoch < num_epochs and not num_epochs_reached:
+        logger.info('Epoch %d' % epoch)
+        progress = tqdm.tqdm(train_iter)
+        for iter_idx, batch_feat, batch_thrpt in enumerate(progress):
+            np_feat = split_and_load(batch_feat, ctx, even_split=False)[0]
+            np_thrpt = split_and_load(batch_thrpt, ctx, even_split=False)[0]
             with autograd.record():
-                ls = get_batch_loss(net, loss, segments_X_shards, nsp_y_shards)
-            for l in ls:
-                l.backward()
+                ls = get_batch_loss(net, loss, np_feat, np_thrpt)
+            ls.backward()
             trainer.step(1)
             l_mean = sum([float(l) for l in ls]) / len(ls)
             metric.add(l_mean, 1)
-            timer.stop()
-            print('Step %d: %.2f' % (step, l_mean))
-            step += 1
-            if step == num_steps:
-                num_steps_reached = True
-                break
+            if iter_idx % 30 == 0:
+                progress.set_description_str(desc='Loss {:3f}'.format(l_mean), refresh=True)
+        epoch += 1
+        logger.info('Loss @ epoch %d: %.3f' % (epoch, (metric[0] / metric[1])))
+        if epoch == num_epochs:
+            num_epochs_reached = True
+            break
 
-    print('NSP loss %.3f' % (metric[0] / metric[1]))
+    logger.info('Final loss %.3f' % (metric[0] / metric[1]))
     return net
 
 
 if __name__ == "__main__":
-    print('Loading data...')
-    train_feats, train_thrpts, test_feats, test_thrpts = load_data(sys.argv[1])
+    ctx = d2l.try_all_gpus()
 
-    print('Training...')
-    bert = train(train_feats, train_thrpts, 8, 3)
+    logger.info('Loading data...')
+    train_iter, test_feats, test_thrpts = load_data(sys.argv[1], batch_size)
+    test_feats = np.array(test_feats, ctx=ctx[0])
+    test_thrpts = np.array(test_thrpts, ctx=ctx[0])
 
-    print('Testing...')
+    logger.info('Training...')
+    bert = train(train_iter, ctx, num_epochs)
+
+    logger.info('Testing...')
     predicts = bert(test_feats)
+    total_error = 0
     for idx in range(len(test_feats)):
         pred = predicts[1][idx].tolist()[0]
         real = test_thrpts[idx].tolist()
-        print('%.2f <> %.2f : %.2f%%' % (pred, real, abs(pred - real) / real))
+        error = abs(pred - real) / real
+        total_error += error
+        logger.debug('Pred %.2f, Expected %.2f, Error %.2f%%' %
+                     (pred, real, 100 * error))
+    logger.info('Average error rate: %.2f%%' % (total_error / len(test_feats)))
