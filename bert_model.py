@@ -1,6 +1,5 @@
 """Use BERT as the performance model."""
 # pylint: disable=invalid-name
-import logging
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -10,11 +9,11 @@ from mxnet import autograd, gluon, init, np, npx
 from mxnet.gluon import nn
 from mxnet.gluon.utils import split_and_load
 
+import logger
+
 npx.set_np()
 
-logging.basicConfig(format='[%(asctime)s] %(levelname)7s %(name)s: %(message)s')
-logger = logging.getLogger()
-logger.setLevel('INFO')
+log = logger.get_logger('BERT')
 
 # Hyper-parameters
 NUM_HEADS = 8
@@ -80,7 +79,7 @@ def expand_hidden(feature):
 
 def load_data(file_path, batch_size):
     """Load tabular feature data."""
-    logger.info('Parsing file...')
+    log.info('Parsing file...')
     with open(file_path, 'r') as filep:
         next(filep) # Get rid of headers
 
@@ -95,7 +94,7 @@ def load_data(file_path, batch_size):
             thrpts.append(float(tokens[-1]))
 
     # Expand featues to (batch, sequence, hidden)
-    logger.info('Expanding features...')
+    log.info('Expanding features...')
     with ProcessPoolExecutor(max_workers=8) as pool:
         expand_features = []
         for start in tqdm.tqdm(range(0, len(features), 8)):
@@ -130,7 +129,7 @@ def get_batch_loss(net, loss, segments_X_shards, nsp_y_shards):
 
     # ls = []
     # nsp_Y_hats = net(segments_X_shards)[1]
-    # logger.info(nsp_y_shards)
+    # log.info(nsp_y_shards)
     # for (hat, shard) in zip(nsp_Y_hats, nsp_y_shards):
     #     ls.append(loss(np.expand_dims(hat, axis=0), np.expand_dims(shard, axis=0)))
     #return ls
@@ -140,7 +139,7 @@ def train(train_iter, ctx, num_epochs):
     """Train a BERT model."""
     net = BERTModel(NUM_HIDDENS, FFN_NUM_HIDDENS, NUM_HEADS, NUM_LAYERS, DROPOUT)
     net.initialize(init.Xavier(), ctx=ctx)
-    logger.info('Model initialized on %s', str(ctx))
+    log.info('Model initialized on %s', str(ctx))
     loss = gluon.loss.L2Loss()
 
     trainer = gluon.Trainer(net.collect_params(), 'adam')
@@ -148,7 +147,7 @@ def train(train_iter, ctx, num_epochs):
     metric = d2l.Accumulator(2)
     num_epochs_reached = False
     while epoch < num_epochs and not num_epochs_reached:
-        logger.info('Epoch %d', epoch)
+        log.info('Epoch %d', epoch)
         progress = tqdm.tqdm(train_iter)
         for iter_idx, (batch_feat, batch_thrpt) in enumerate(progress):
             np_feat = split_and_load(batch_feat, ctx, even_split=False)[0]
@@ -161,13 +160,13 @@ def train(train_iter, ctx, num_epochs):
             metric.add(l_mean, 1)
             if iter_idx % 30 == 0:
                 progress.set_description_str(desc='Loss {:3f}'.format(l_mean), refresh=True)
-        logger.info('Loss @ epoch %d: %.3f', epoch, metric[0] / metric[1])
+        log.info('Loss @ epoch %d: %.3f', epoch, metric[0] / metric[1])
         epoch += 1
         if epoch == num_epochs:
             num_epochs_reached = True
             break
 
-    logger.info('Final loss %.3f', metric[0] / metric[1])
+    log.info('Final loss %.3f', metric[0] / metric[1])
     return net
 
 
@@ -175,15 +174,15 @@ def run():
     """Main process"""
     ctx = d2l.try_all_gpus()
 
-    logger.info('Loading data...')
+    log.info('Loading data...')
     train_iter, test_feats, test_thrpts = load_data(sys.argv[1], BATCH_SIZE)
     test_feats = np.array(test_feats, ctx=ctx[0])
     test_thrpts = np.array(test_thrpts, ctx=ctx[0])
 
-    logger.info('Training...')
+    log.info('Training...')
     bert = train(train_iter, ctx, NUM_EPOCHS)
 
-    logger.info('Testing...')
+    log.info('Testing...')
     predicts = bert(test_feats)
     errors = []
     for idx in range(len(test_feats)):
@@ -191,8 +190,8 @@ def run():
         real = test_thrpts[idx].tolist()
         error = abs(pred - real) / real
         errors.append(error)
-        logger.debug('Pred %.2f, Expected %.2f, Error %.2f%%', pred, real, 100 * error)
-    logger.info('Average error rate: %.2f%%', 100 * np.array(errors).mean())
+        log.debug('Pred %.2f, Expected %.2f, Error %.2f%%', pred, real, 100 * error)
+    log.info('Average error rate: %.2f%%', 100 * np.array(errors).mean())
 
 if __name__ == "__main__":
     run()
