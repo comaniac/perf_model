@@ -1,7 +1,11 @@
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
 import d2l
-from mxnet import autograd, gluon, np, npx, init
+from mxnet import autograd, gluon, init, np, npx
 from mxnet.gluon import nn
+
+import tqdm
 
 npx.set_np()
 
@@ -57,6 +61,10 @@ class BERTModel(nn.Block):
 
 ## Functions
 
+def expand_hidden(feature):
+    import numpy as np
+    expand_feat = np.expand_dims(np.array(feature), axis=0)
+    return np.broadcast_to(expand_feat.T, shape=(len(feature), num_hiddens))
 
 def load_data(file_path):
     with open(file_path, 'r') as filep:
@@ -65,10 +73,7 @@ def load_data(file_path):
         # Parse features to sequence. num_seq = num_feature + 1
         features = []
         thrpts = []
-        cnt = 0
-        for line in filep:
-            if cnt > 10:
-                break
+        for line in tqdm.tqdm(filep):
             tokens = line.replace('\n', '').split(',')
             feature = [0] # initial <CLS> to 0
             for v in tokens[:-1]:
@@ -77,18 +82,28 @@ def load_data(file_path):
                 except:
                     feature.append(0)
 
-            # Expand featues to (batch, sequence, hidden)
-            cnt += 1
-            expand_feat = np.expand_dims(np.array(feature), axis=0)
-            features.append(np.broadcast_to(expand_feat.T, shape=(len(feature), num_hiddens)))
+            features.append(feature)
             thrpts.append(float(tokens[-1]))
 
-        splitter = int(len(features) * 0.8)
-        train_feats = np.array(features[:splitter])
-        train_thrpts = np.array(thrpts[:splitter])
-        test_feats = np.array(features[splitter:])
-        test_thrpts = np.array(thrpts[splitter:])
-        return train_feats, train_thrpts, test_feats, test_thrpts
+    # Expand featues to (batch, sequence, hidden)
+    with ProcessPoolExecutor(max_workers=8) as pool:
+        expand_features = []
+        for start in tqdm.tqdm(range(0, len(features), 8)):
+            futures = [
+                pool.submit(expand_hidden, feature=feature)
+                for feature in features[start:min(start + 8, len(features))]
+            ]
+            for future in as_completed(futures):
+                expand_features.append(future.result())
+        features = np.array(expand_features)
+
+
+    splitter = int(len(features) * 0.8)
+    train_feats = np.array(features[:splitter])
+    train_thrpts = np.array(thrpts[:splitter])
+    test_feats = np.array(features[splitter:])
+    test_thrpts = np.array(thrpts[splitter:])
+    return train_feats, train_thrpts, test_feats, test_thrpts
 
 
 def get_batch_loss(net, loss, segments_X_shards, nsp_y_shards):
@@ -137,16 +152,16 @@ def train(train_feats, train_thrpts, batch_size, num_steps):
     return net
 
 
+if __name__ == "__main__":
+    print('Loading data...')
+    train_feats, train_thrpts, test_feats, test_thrpts = load_data(sys.argv[1])
 
-print('Loading data...')
-train_feats, train_thrpts, test_feats, test_thrpts = load_data(sys.argv[1])
+    print('Training...')
+    bert = train(train_feats, train_thrpts, 8, 3)
 
-print('Training...')
-bert = train(train_feats, train_thrpts, 8, 3)
-
-print('Testing...')
-predicts = bert(test_feats)
-for idx in range(len(test_feats)):
-    pred = predicts[1][idx].tolist()[0]
-    real = test_thrpts[idx].tolist()
-    print('%.2f <> %.2f : %.2f%%' % (pred, real, abs(pred - real) / real))
+    print('Testing...')
+    predicts = bert(test_feats)
+    for idx in range(len(test_feats)):
+        pred = predicts[1][idx].tolist()[0]
+        real = test_thrpts[idx].tolist()
+        print('%.2f <> %.2f : %.2f%%' % (pred, real, abs(pred - real) / real))
