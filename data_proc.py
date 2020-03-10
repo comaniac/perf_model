@@ -3,16 +3,19 @@ import argparse
 import glob
 import json
 import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from math import ceil
-from typing import IO, Optional, Set
+from typing import Optional, Set
 
 import numpy as np
 import tqdm
+from filelock import FileLock
 
 import topi  # pylint: disable=unused-import
 from tvm.autotvm.record import load_from_file
 from tvm.autotvm.task import create
-from tvm.autotvm.task.space import AnnotateEntity, OtherOptionEntity, SplitEntity
+from tvm.autotvm.task.space import (AnnotateEntity, OtherOptionEntity,
+                                    SplitEntity)
 
 
 def create_config():
@@ -63,6 +66,10 @@ def create_config():
     tocsv = subparser.add_parser('json2csv',
                                  help='Transform JSON feature to CSV format')
     tocsv.add_argument('path', help='JSON feature file or path')
+    tocsv.add_argument(
+        '--std',
+        action='store_true',
+        help='Standardize feature values and make log to throughputs')
     tocsv.add_argument('-o',
                        '--out',
                        default='csv',
@@ -132,6 +139,43 @@ def extract_feature(inp, log_scale=False):
     return features
 
 
+def extract_feature_from_file(log_file: str, out_path: str, log_scale: bool):
+    """Parse a log file and extract featues to the output file"""
+    model_key: Optional[str] = None
+    data = []
+    for inp, res in load_from_file(log_file):
+        if model_key is None:
+            model_key = gen_key_str(inp)
+        elif model_key != gen_key_str(inp):
+            print('Key mismatch %s <> %s, skip %s' %
+                  (model_key, gen_key_str(inp), str(inp)))
+            continue
+
+        features = extract_feature(inp, log_scale)
+
+        # Compute GFLOP/s
+        task = create(inp.task.name, inp.task.args, inp.target)
+        if res.error_no == 0:
+            features['thrpt'] = np.around(task.flop / 1e9 / np.mean(res.costs),
+                                          2).tolist()
+        else:
+            features['thrpt'] = 0
+
+        data.append(json.dumps(features))
+
+    if model_key is None:
+        print('No data processed')
+        return
+
+    out_file = '{0}/{1}.json'.format(out_path, model_key)
+    lock_file = '{0}.lock'.format(out_file)
+    with FileLock(lock_file):
+        with open(out_file, 'a') as filep:
+            for record in data:
+                filep.write(record)
+                filep.write('\n')
+
+
 def featurize(log_path: str, out_path: str, log_scale=True):
     """Parse tuning logs, extract features, and output features by target and ops to JSON files.
 
@@ -151,37 +195,21 @@ def featurize(log_path: str, out_path: str, log_scale=True):
         os.mkdir(out_path)
 
     # Extract features for each log file.
-    path = '{0}/*'.format(log_path) if os.path.isdir(log_path) else log_path
-    for log_file in tqdm.tqdm(glob.glob(path)):
-        model_key: Optional[str] = None
-        out_file: Optional[IO] = None
-        for inp, res in load_from_file(log_file):
-            if model_key is None:
-                model_key = gen_key_str(inp)
-                out_file = open('{0}/{1}.json'.format(out_path, model_key),
-                                'a')
-            elif model_key != gen_key_str(inp):
-                print('Key mismatch %s <> %s, skip %s' %
-                      (model_key, gen_key_str(inp), str(inp)))
-                continue
+    with ProcessPoolExecutor(max_workers=8) as pool:
+        path = '{0}/*'.format(log_path) if os.path.isdir(
+            log_path) else log_path
+        file_list = glob.glob(path)
+        for start in tqdm.tqdm(range(0, len(file_list), 8)):
+            futures = [
+                pool.submit(extract_feature_from_file, log_file, out_path,
+                            log_scale)
+                for log_file in file_list[start:min(start + 8, len(file_list))]
+            ]
+            for _ in as_completed(futures):
+                pass
 
-            features = extract_feature(inp, log_scale)
-
-            # Compute GFLOP/s
-            task = create(inp.task.name, inp.task.args, inp.target)
-            if res.error_no == 0:
-                features['thrpt'] = np.around(
-                    task.flop / 1e9 / np.mean(res.costs), 2).tolist()
-            else:
-                features['thrpt'] = 0
-
-            if out_file is None:
-                break
-            out_file.write(json.dumps(features))
-            out_file.write('\n')
-
-        if out_file is not None:
-            out_file.close()
+    # Remove lock files
+    os.remove('{0}/*.lock'.format(out_path))
 
 
 def classify(classify_scale: int, log_path: str, out_path: str):
@@ -277,13 +305,16 @@ def log_thrpt(log_path: str, out_path: str):
                 filep.write('\n')
 
 
-def json2csv(json_path: str, out_path: str):
+def json2csv(json_path: str, std: bool, out_path: str):
     """Parse feature files in JSON format to CSV format.
 
     Parameters
     ----------
     json_path: str
         JSON feature file path (file or folder).
+
+    std: bool
+        Whether to standardize features and make log to throughputs.
 
     out_path: str
         The folder to CSV format feature outputs.
@@ -306,7 +337,47 @@ def json2csv(json_path: str, out_path: str):
         features.remove('thrpt')
         feature_list = list(features) + ['thrpt']
 
-        # The second pass fills out the data.
+        # The second pass fills out the data to a data frame.
+        dataframe = []
+        for record in data:
+            csv_record = []
+            for feat in feature_list:
+                if feat not in record:
+                    csv_record.append(str(None))
+                else:
+                    csv_record.append(str(record[feat]))
+            dataframe.append(csv_record)
+
+        if std:
+            # Metadata for mean, std, and category mapping.
+            meta_file = os.path.join(
+                out_path,
+                os.path.basename(json_file).replace('.json', '.meta'))
+            with open(meta_file, 'w') as filep:
+                std_data = []
+
+                # Let each feature be a row.
+                tran_data = np.array(dataframe).T
+                for row in tran_data[:-1]:  # pylint: disable=unsubscriptable-object
+                    try:  # Standardize floating values.
+                        float_row = row.astype('float')
+                        meta = [float_row.mean(), float_row.std()]
+                        meta[1] = 1 if meta[1] == 0 else meta[1] # Workaround for std=0
+                        std_data.append((float_row - meta[0]) / meta[1])
+                    except ValueError:  # String to index transformation.
+                        meta = np.unique(row)
+                        cate_map = {c: i for i, c in enumerate(meta)}
+                        std_data.append([cate_map[c] for c in row])
+
+                    filep.write(','.join([str(e) for e in meta]))
+                    filep.write('\n')
+
+                # Log throughput
+                # pylint: disable=unsubscriptable-object
+                std_data.append(np.log(tran_data[-1].astype('float') + 1e-6))
+            dataframe = np.array(std_data).T
+
+        # Write to file
         file_name = os.path.basename(json_file).replace('.json', '.csv')
         with open(os.path.join(out_path, file_name), 'w') as filep:
             # Write titles
@@ -314,14 +385,8 @@ def json2csv(json_path: str, out_path: str):
             filep.write('\n')
 
             # Write features and results
-            for record in data:
-                csv_record = []
-                for feat in feature_list:
-                    if feat not in record:
-                        csv_record.append(str(None))
-                    else:
-                        csv_record.append(str(record[feat]))
-                filep.write(','.join(csv_record))
+            for record in dataframe:
+                filep.write(','.join([str(r) for r in record]))
                 filep.write('\n')
 
 
@@ -341,6 +406,6 @@ if __name__ == "__main__":
         log_thrpt(CONFIGS.path, CONFIGS.out)
     elif CONFIGS.mode == 'json2csv':
         print('Transofrm JSON features to CSV format')
-        json2csv(CONFIGS.path, CONFIGS.out)
+        json2csv(CONFIGS.path, CONFIGS.std, CONFIGS.out)
     else:
         raise RuntimeError('Unknown mode %s' % CONFIGS.mode)

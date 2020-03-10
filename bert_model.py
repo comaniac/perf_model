@@ -1,3 +1,5 @@
+"""Use BERT as the performance model."""
+# pylint: disable=invalid-name
 import logging
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -15,25 +17,26 @@ logger = logging.getLogger()
 logger.setLevel('INFO')
 
 # Hyper-parameters
-num_heads = 8
-num_hiddens = num_heads # Force 1-to-1 attention
-num_pred_hiddens = 512
-ffn_num_hiddens = 1024
-num_layers = 6
-dropout = 0.3
-batch_size = 32
-num_epochs = 20
+NUM_HEADS = 8
+NUM_HIDDENS = NUM_HEADS # Force 1-to-1 attention
+NUM_PRED_HIDDENS = 512
+FFN_NUM_HIDDENS = 1024
+NUM_LAYERS = 6
+DROPOUT = 0.3
+BATCH_SIZE = 32
+NUM_EPOCHS = 20
 
 ### Class Declarations
 
 class BERTEncoder(nn.Block):
+    """BERT Encoder class."""
     def __init__(self, num_hiddens, ffn_num_hiddens, num_heads, num_layers, dropout, **kwargs):
         super(BERTEncoder, self).__init__(**kwargs)
         self.blks = nn.Sequential()
         for _ in range(num_layers):
             self.blks.add(d2l.EncoderBlock(num_hiddens, ffn_num_hiddens, num_heads, dropout))
 
-    def forward(self, features):
+    def forward(self, features): # pylint: disable=arguments-differ
         X = features
         for blk in self.blks:
             X = blk(X, None)
@@ -41,13 +44,14 @@ class BERTEncoder(nn.Block):
 
 
 class ThrptPred(nn.Block):
-    def __init__(self, num_hiddens, **kwargs):
+    """The network to predict throughput."""
+    def __init__(self, **kwargs):
         super(ThrptPred, self).__init__(**kwargs)
         self.mlp = nn.Sequential()
-        self.mlp.add(nn.Dense(num_pred_hiddens, activation='relu'))
+        self.mlp.add(nn.Dense(NUM_PRED_HIDDENS, activation='relu'))
         self.mlp.add(nn.Dense(1))
 
-    def forward(self, X):
+    def forward(self, X):  # pylint: disable=arguments-differ
         # 0 is the index of the CLS token
         X = X[:, 0, :]
         # X shape: (batch size, num_hiddens)
@@ -58,9 +62,9 @@ class BERTModel(nn.Block):
     def __init__(self, num_hiddens, ffn_num_hiddens, num_heads, num_layers, dropout):
         super(BERTModel, self).__init__()
         self.encoder = BERTEncoder(num_hiddens, ffn_num_hiddens, num_heads, num_layers, dropout)
-        self.nsp = ThrptPred(num_hiddens)
+        self.nsp = ThrptPred()
 
-    def forward(self, features):
+    def forward(self, features):  # pylint: disable=arguments-differ
         encoded_X = self.encoder(features)
         nsp_Y_hat = self.nsp(encoded_X)
         return encoded_X, nsp_Y_hat
@@ -69,11 +73,13 @@ class BERTModel(nn.Block):
 ## Functions
 
 def expand_hidden(feature):
+    #pylint: disable=redefined-outer-name
     import numpy as np
     expand_feat = np.expand_dims(np.array(feature), axis=0)
-    return np.broadcast_to(expand_feat.T, shape=(len(feature), num_hiddens))
+    return np.broadcast_to(expand_feat.T, shape=(len(feature), NUM_HIDDENS))
 
 def load_data(file_path, batch_size):
+    """Load tabular feature data."""
     logger.info('Parsing file...')
     with open(file_path, 'r') as filep:
         next(filep) # Get rid of headers
@@ -87,7 +93,7 @@ def load_data(file_path, batch_size):
             for v in tokens[:-1]:
                 try:
                     feature.append(float(v))
-                except:
+                except ValueError:
                     feature.append(0)
 
             features.append(feature)
@@ -136,9 +142,10 @@ def get_batch_loss(net, loss, segments_X_shards, nsp_y_shards):
 
 
 def train(train_iter, ctx, num_epochs):
-    net = BERTModel(num_hiddens, ffn_num_hiddens, num_heads, num_layers, dropout)
+    """Train a BERT model."""
+    net = BERTModel(NUM_HIDDENS, FFN_NUM_HIDDENS, NUM_HEADS, NUM_LAYERS, DROPOUT)
     net.initialize(init.Xavier(), ctx=ctx)
-    logger.info('Model initialized on %s' % str(ctx))
+    logger.info('Model initialized on %s', str(ctx))
     loss = gluon.loss.L2Loss()
 
     trainer = gluon.Trainer(net.collect_params(), 'adam')
@@ -146,7 +153,7 @@ def train(train_iter, ctx, num_epochs):
     metric = d2l.Accumulator(2)
     num_epochs_reached = False
     while epoch < num_epochs and not num_epochs_reached:
-        logger.info('Epoch %d' % epoch)
+        logger.info('Epoch %d', epoch)
         progress = tqdm.tqdm(train_iter)
         for iter_idx, batch_feat, batch_thrpt in enumerate(progress):
             np_feat = split_and_load(batch_feat, ctx, even_split=False)[0]
@@ -160,34 +167,37 @@ def train(train_iter, ctx, num_epochs):
             if iter_idx % 30 == 0:
                 progress.set_description_str(desc='Loss {:3f}'.format(l_mean), refresh=True)
         epoch += 1
-        logger.info('Loss @ epoch %d: %.3f' % (epoch, (metric[0] / metric[1])))
+        logger.info('Loss @ epoch %d: %.3f', epoch, metric[0] / metric[1])
         if epoch == num_epochs:
             num_epochs_reached = True
             break
 
-    logger.info('Final loss %.3f' % (metric[0] / metric[1]))
+    logger.info('Final loss %.3f', metric[0] / metric[1])
     return net
 
 
-if __name__ == "__main__":
+def run():
+    """Main process"""
     ctx = d2l.try_all_gpus()
 
     logger.info('Loading data...')
-    train_iter, test_feats, test_thrpts = load_data(sys.argv[1], batch_size)
+    train_iter, test_feats, test_thrpts = load_data(sys.argv[1], BATCH_SIZE)
     test_feats = np.array(test_feats, ctx=ctx[0])
     test_thrpts = np.array(test_thrpts, ctx=ctx[0])
 
     logger.info('Training...')
-    bert = train(train_iter, ctx, num_epochs)
+    bert = train(train_iter, ctx, NUM_EPOCHS)
 
     logger.info('Testing...')
     predicts = bert(test_feats)
-    total_error = 0
+    errors = []
     for idx in range(len(test_feats)):
         pred = predicts[1][idx].tolist()[0]
         real = test_thrpts[idx].tolist()
         error = abs(pred - real) / real
-        total_error += error
-        logger.debug('Pred %.2f, Expected %.2f, Error %.2f%%' %
-                     (pred, real, 100 * error))
-    logger.info('Average error rate: %.2f%%' % (total_error / len(test_feats)))
+        errors.append(error)
+        logger.debug('Pred %.2f, Expected %.2f, Error %.2f%%', pred, real, 100 * error)
+    logger.info('Average error rate: %.2f%%', 100 * np.array(errors).mean())
+
+if __name__ == "__main__":
+    run()
