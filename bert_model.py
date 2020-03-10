@@ -89,14 +89,9 @@ def load_data(file_path, batch_size):
         thrpts = []
         for line in tqdm.tqdm(filep):
             tokens = line.replace('\n', '').split(',')
-            feature = [0] # initial <CLS> to 0
-            for v in tokens[:-1]:
-                try:
-                    feature.append(float(v))
-                except ValueError:
-                    feature.append(0)
 
-            features.append(feature)
+            # initial <CLS> to 0
+            features.append([0] + [float(v) for v in tokens[:-1]])
             thrpts.append(float(tokens[-1]))
 
     # Expand featues to (batch, sequence, hidden)
@@ -155,7 +150,7 @@ def train(train_iter, ctx, num_epochs):
     while epoch < num_epochs and not num_epochs_reached:
         logger.info('Epoch %d', epoch)
         progress = tqdm.tqdm(train_iter)
-        for iter_idx, batch_feat, batch_thrpt in enumerate(progress):
+        for iter_idx, (batch_feat, batch_thrpt) in enumerate(progress):
             np_feat = split_and_load(batch_feat, ctx, even_split=False)[0]
             np_thrpt = split_and_load(batch_thrpt, ctx, even_split=False)[0]
             with autograd.record():
@@ -166,8 +161,8 @@ def train(train_iter, ctx, num_epochs):
             metric.add(l_mean, 1)
             if iter_idx % 30 == 0:
                 progress.set_description_str(desc='Loss {:3f}'.format(l_mean), refresh=True)
-        epoch += 1
         logger.info('Loss @ epoch %d: %.3f', epoch, metric[0] / metric[1])
+        epoch += 1
         if epoch == num_epochs:
             num_epochs_reached = True
             break
