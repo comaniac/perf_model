@@ -21,9 +21,9 @@ NUM_HIDDENS = NUM_HEADS # Force 1-to-1 attention
 NUM_PRED_HIDDENS = 512
 FFN_NUM_HIDDENS = 1024
 NUM_LAYERS = 6
-DROPOUT = 0.3
-BATCH_SIZE = 32
-NUM_EPOCHS = 20
+DROPOUT = 0.2
+BATCH_SIZE = 16
+NUM_EPOCHS = 5
 
 ### Class Declarations
 
@@ -174,7 +174,7 @@ def run():
     """Main process"""
     ctx = d2l.try_all_gpus()
 
-    log.info('Loading data...')
+    log.info('Loading data from %s...', sys.argv[1])
     train_iter, test_feats, test_thrpts = load_data(sys.argv[1], BATCH_SIZE)
     test_feats = np.array(test_feats, ctx=ctx[0])
     test_thrpts = np.array(test_thrpts, ctx=ctx[0])

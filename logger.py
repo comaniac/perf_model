@@ -24,6 +24,7 @@ def get_logger(name: str) -> logging.Logger:
         return LOGGER_TABLE[name]
 
     logger = logging.getLogger(name)
+    logger.parent = None
     logger.setLevel(logging.INFO)
     logger.addHandler(STREAM_HANDLER)
     logger.addHandler(FILE_HANDLER)
