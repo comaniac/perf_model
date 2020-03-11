@@ -17,15 +17,18 @@ log = logger.get_logger('BERT')
 
 # Hyper-parameters
 NUM_HEADS = 8
-NUM_HIDDENS = NUM_HEADS # Force 1-to-1 attention
+NUM_HIDDENS = NUM_HEADS  # Force 1-to-1 attention
 NUM_PRED_HIDDENS = 512
 FFN_NUM_HIDDENS = 1024
 NUM_LAYERS = 6
 DROPOUT = 0.2
 BATCH_SIZE = 16
 NUM_EPOCHS = 5
+LEARNING_RATE = 1e-4
+WEIGHT_DECAY = 0.1
 
 ### Class Declarations
+
 
 class BERTEncoder(nn.Block):
     """BERT Encoder class."""
@@ -35,7 +38,7 @@ class BERTEncoder(nn.Block):
         for _ in range(num_layers):
             self.blks.add(d2l.EncoderBlock(num_hiddens, ffn_num_hiddens, num_heads, dropout))
 
-    def forward(self, features): # pylint: disable=arguments-differ
+    def forward(self, features):  # pylint: disable=arguments-differ
         X = features
         for blk in self.blks:
             X = blk(X, None)
@@ -71,17 +74,19 @@ class BERTModel(nn.Block):
 
 ## Functions
 
+
 def expand_hidden(feature):
     #pylint: disable=redefined-outer-name
     import numpy as np
     expand_feat = np.expand_dims(np.array(feature), axis=0)
     return np.broadcast_to(expand_feat.T, shape=(len(feature), NUM_HIDDENS))
 
+
 def load_data(file_path, batch_size):
     """Load tabular feature data."""
     log.info('Parsing file...')
     with open(file_path, 'r') as filep:
-        next(filep) # Get rid of headers
+        next(filep)  # Get rid of headers
 
         # Parse features to sequence. num_seq = num_feature + 1
         features = []
@@ -109,11 +114,10 @@ def load_data(file_path, batch_size):
     splitter = int(len(features) * 0.8)
     train_feats = np.array(features[:splitter])
     train_thrpts = np.array(thrpts[:splitter])
-    train_iter = gluon.data.DataLoader(
-        gluon.data.ArrayDataset(train_feats, train_thrpts),
-        batch_size,
-        shuffle=True,
-        num_workers=d2l.get_dataloader_workers())
+    train_iter = gluon.data.DataLoader(gluon.data.ArrayDataset(train_feats, train_thrpts),
+                                       batch_size,
+                                       shuffle=True,
+                                       num_workers=d2l.get_dataloader_workers())
     test_feats = np.array(features[splitter:])
     test_thrpts = np.array(thrpts[splitter:])
     return train_iter, test_feats, test_thrpts
@@ -142,7 +146,10 @@ def train(train_iter, ctx, num_epochs):
     log.info('Model initialized on %s', str(ctx))
     loss = gluon.loss.L2Loss()
 
-    trainer = gluon.Trainer(net.collect_params(), 'adam')
+    trainer = gluon.Trainer(net.collect_params(), 'adam', {
+        'learning_rate': LEARNING_RATE,
+        'wd': WEIGHT_DECAY
+    })
     epoch = 0
     metric = d2l.Accumulator(2)
     num_epochs_reached = False
@@ -192,6 +199,7 @@ def run():
         errors.append(error)
         log.debug('Pred %.2f, Expected %.2f, Error %.2f%%', pred, real, 100 * error)
     log.info('Average error rate: %.2f%%', 100 * np.array(errors).mean())
+
 
 if __name__ == "__main__":
     run()
