@@ -22,8 +22,8 @@ NUM_PRED_HIDDENS = 512
 FFN_NUM_HIDDENS = 1024
 NUM_LAYERS = 6
 DROPOUT = 0.2
-BATCH_SIZE = 16
-NUM_EPOCHS = 5
+BATCH_SIZE = 1024
+NUM_EPOCHS = 40
 LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 0.1
 
@@ -155,7 +155,7 @@ def train(train_iter, ctx, num_epochs):
     num_epochs_reached = False
     while epoch < num_epochs and not num_epochs_reached:
         log.info('Epoch %d', epoch)
-        progress = tqdm.tqdm(train_iter)
+        progress = tqdm.tqdm(train_iter, bar_format='{desc}{percentage:3.0f}%|{bar:50}{r_bar}')
         for iter_idx, (batch_feat, batch_thrpt) in enumerate(progress):
             np_feat = split_and_load(batch_feat, ctx, even_split=False)[0]
             np_thrpt = split_and_load(batch_thrpt, ctx, even_split=False)[0]
