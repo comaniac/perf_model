@@ -13,9 +13,6 @@ FORMATTER = logging.Formatter('[%(asctime)s] %(levelname)7s %(name)s: %(message)
 STREAM_HANDLER = logging.StreamHandler()
 STREAM_HANDLER.setFormatter(FORMATTER)
 
-FILE_HANDLER = logging.FileHandler('run-{}.log'.format(int(time.time())))
-FILE_HANDLER.setFormatter(FORMATTER)
-
 
 def get_logger(name: str) -> logging.Logger:
     """Attach to the default logger."""
@@ -27,8 +24,16 @@ def get_logger(name: str) -> logging.Logger:
     logger.parent = None
     logger.setLevel(logging.INFO)
     logger.addHandler(STREAM_HANDLER)
-    logger.addHandler(FILE_HANDLER)
 
     LOGGER_TABLE[name] = logger
     return logger
+
+def enable_log_file(file_name: str):
+    """Add file handler to all loggers."""
+
+    file_handler = logging.FileHandler(file_name)
+    file_handler.setFormatter(FORMATTER)
+
+    for logger in LOGGER_TABLE.values():
+        logger.addHandler(file_handler)
 
