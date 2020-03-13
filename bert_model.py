@@ -234,13 +234,13 @@ if __name__ == "__main__":
     main_args = argparse.Namespace()
     main_args.data_file = sys.argv[1]
     main_args.batch_size = 1024
-    main_args.num_heads = 8
+    main_args.num_heads = 16
     main_args.num_hiddens = main_args.num_heads  # Force 1-to-1 attention
-    main_args.num_pred_hiddens = 512
-    main_args.num_layers = 6
+    main_args.num_pred_hiddens = 1024
+    main_args.num_layers = 12
     main_args.dropout = 0.2
     main_args.ffn_num_hiddens = 1024
-    main_args.epochs = 40
-    main_args.lr = 1e-4
+    main_args.epochs = 80
+    main_args.lr = 5e-5
     main_args.wd = 1
     train_bert(main_args)

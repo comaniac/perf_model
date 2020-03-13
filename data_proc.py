@@ -69,7 +69,7 @@ def create_config():
     tocsv.add_argument(
         '--std',
         action='store_true',
-        help='Standardize feature values and make log to throughputs')
+        help='Standardize feature values')
     tocsv.add_argument('-o',
                        '--out',
                        default='csv',
@@ -314,7 +314,7 @@ def json2csv(json_path: str, std: bool, out_path: str):
         JSON feature file path (file or folder).
 
     std: bool
-        Whether to standardize features and make log to throughputs.
+        Whether to standardize features.
 
     out_path: str
         The folder to CSV format feature outputs.
@@ -372,9 +372,8 @@ def json2csv(json_path: str, std: bool, out_path: str):
                     filep.write(','.join([str(e) for e in meta]))
                     filep.write('\n')
 
-                # Log throughput
                 # pylint: disable=unsubscriptable-object
-                std_data.append(np.log(tran_data[-1].astype('float') + 1e-6))
+                std_data.append(tran_data[-1])
             dataframe = np.array(std_data).T
 
         # Write to file
