@@ -373,7 +373,7 @@ def json2csv(json_path: str, std: bool, out_path: str):
                     filep.write('\n')
 
                 # pylint: disable=unsubscriptable-object
-                std_data.append(tran_data[-1])
+                std_data.append(tran_data[-1].astype('float32'))
             dataframe = np.array(std_data).T
 
         # Write to file
