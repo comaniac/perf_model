@@ -29,7 +29,8 @@ def train(args):
     train_df = df[:num_train]
     test_df = df[num_train:]
 
-    predictor = task.fit(train_data=task.Dataset(df=train_df), label='thrpt')
+    predictor = task.fit(train_data=task.Dataset(df=train_df), stack_ensemble_levels=2,
+                         label='thrpt')
     performance = predictor.evaluate(test_df)
     test_prediction = predictor.predict(test_df)
     print(performance)
