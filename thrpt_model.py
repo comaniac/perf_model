@@ -4,6 +4,7 @@ import numpy as np
 import autogluon
 import os
 from autogluon import TabularPrediction as task
+import matplotlib.pyplot as plt
 
 INVALID_THD = 10  # Invalid throughput threshold ratio.
 INVALID_LOG_THD = np.log(INVALID_THD)
@@ -34,7 +35,7 @@ def train_regression(args):
 
     predictor = task.fit(train_data=task.Dataset(df=train_df),
                          hyperparameter_tune=True,
-                         num_bagging_folds=5,
+                         num_bagging_folds=2,
                          stack_ensemble_levels=1,
                          output_directory=args.out_dir, label='thrpt')
     performance = predictor.evaluate(test_df)
