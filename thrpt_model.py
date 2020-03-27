@@ -21,7 +21,7 @@ def parse_args():
     return args
 
 
-def train(args):
+def train_regression(args):
     df = pd.read_csv(args.dataset)
     # Pre-filter the invalid through-puts.
     # For these through-puts, we can directly obtain the result from the
@@ -33,16 +33,19 @@ def train(args):
     test_df = df[num_train:]
 
     predictor = task.fit(train_data=task.Dataset(df=train_df),
+                         hyperparameter_tune=True,
+                         num_bagging_folds=5,
+                         stack_ensemble_levels=1,
                          output_directory=args.out_dir, label='thrpt')
     performance = predictor.evaluate(test_df)
     test_prediction = predictor.predict(test_df)
     ret = []
     for i, (lhs, rhs) in enumerate(zip(test_df['thrpt'].to_numpy(), test_prediction)):
-        ret.append((i, lhs, rhs))
+        ret.append([i, lhs, rhs])
     df_result = pd.DataFrame(ret)
     df_result.to_csv(os.path.join(args.out_dir, 'pred_result.csv'))
 
 
 if __name__ == "__main__":
     args = parse_args()
-    train(args)
+    train_regression(args)
