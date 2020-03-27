@@ -100,7 +100,7 @@ class PerfNet(gluon.HybridBlock):
 
 
 def evaluate_ranking(test_df):
-
+    pass
 
 
 def train_ranking(train_df, test_df):
@@ -125,7 +125,6 @@ def train_ranking(train_df, test_df):
     for i in range(args.niter):
         with mx.autograd.record():
             pass
-
 
 
 if __name__ == "__main__":
