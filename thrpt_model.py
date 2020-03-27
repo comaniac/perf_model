@@ -2,6 +2,7 @@ import argparse
 import pandas as pd
 import numpy as np
 import autogluon
+import os
 from autogluon import TabularPrediction as task
 
 INVALID_THD = 10  # Invalid throughput threshold ratio.
@@ -12,6 +13,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Cost Model')
     parser.add_argument('--dataset', type=str, required=True,
                         help='path to the input csv file.')
+    parser.add_argument('--out_dir', type=str, default='thrpt_model_out',
+                        help='output path of the througput model.')
     parser.add_argument('--test_ratio', type=float, default=0.2,
                         help='ratio of the test data.')
     args = parser.parse_args()
@@ -29,11 +32,15 @@ def train(args):
     train_df = df[:num_train]
     test_df = df[num_train:]
 
-    predictor = task.fit(train_data=task.Dataset(df=train_df), stack_ensemble_levels=2,
-                         label='thrpt')
+    predictor = task.fit(train_data=task.Dataset(df=train_df),
+                         output_directory=args.out_dir, label='thrpt')
     performance = predictor.evaluate(test_df)
     test_prediction = predictor.predict(test_df)
-    print(performance)
+    ret = []
+    for i, (lhs, rhs) in enumerate(zip(test_df['thrpt'].to_numpy(), test_prediction)):
+        ret.append((i, lhs, rhs))
+    df_result = pd.DataFrame(ret)
+    df_result.to_csv(os.path.join(args.out_dir, 'pred_result.csv'))
 
 
 if __name__ == "__main__":
