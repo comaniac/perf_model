@@ -230,7 +230,10 @@ def train_nn(args, train_df, test_df):
                   .format(i + 1, args.niter,
                           avg_regress_loss / avg_regress_loss_denom,
                           avg_rank_loss / avg_rank_loss_denom))
-
+            avg_regress_loss = 0
+            avg_regress_loss_denom = 0
+            avg_rank_loss = 0
+            avg_rank_loss_denom = 0
 
 if __name__ == "__main__":
     args = parse_args()
