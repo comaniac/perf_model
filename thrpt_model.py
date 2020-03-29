@@ -157,7 +157,7 @@ def evaluate_nn(test_features, test_labels, embed_net, regression_score_net, ran
 def train_nn(args, train_df, test_df):
     ctx = mx.gpu() if args.gpu else mx.cpu()
     batch_size = args.batch_size
-    embed_net = PerfNet(64, 2, 0.1)
+    embed_net = PerfNet(128, 3, 0.1)
     rank_score_net = nn.HybridSequential()
     with rank_score_net.name_scope():
         rank_score_net.add(nn.Dense(32, flatten=False))
@@ -255,6 +255,7 @@ def train_nn(args, train_df, test_df):
             avg_regress_loss_denom = 0
             avg_rank_loss = 0
             avg_rank_loss_denom = 0
+
 
 if __name__ == "__main__":
     args = parse_args()
