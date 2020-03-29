@@ -1,14 +1,15 @@
 import argparse
 import pandas as pd
 import numpy as np
-import autogluon
+import random
+import catboost
 import os
-from autogluon import TabularPrediction as task
 import mxnet as mx
 from mxnet import gluon
 from mxnet.gluon import nn
 import matplotlib.pyplot as plt
 
+mx.npx.set_np()
 INVALID_THD = 10  # Invalid throughput threshold ratio.
 INVALID_LOG_THD = np.log(INVALID_THD)
 
@@ -33,25 +34,27 @@ def plot_save_figure(gt_thrpt, pred_thrpt, save_dir=None):
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Cost Model')
+    parser.add_argument('--seed', type=int, default=100, help='Seed for the training.')
     parser.add_argument('--dataset', type=str, required=True,
                         help='path to the input csv file.')
     parser.add_argument('--out_dir', type=str, default='thrpt_model_out',
                         help='output path of the througput model.')
-    parser.add_argument('--auto', action='store_true',
-                        help='Whether to use AutoGluon.')
+    parser.add_argument('--algo', choices=['auto', 'cat', 'nn'],
+                        help='The algorithm to use.')
     parser.add_argument('--test_ratio', type=float, default=0.2,
                         help='ratio of the test data.')
     parser.add_argument('--lr', type=float, default=1E-3,
                         help='The learning rate of the throuphput model.')
     parser.add_argument('--wd', type=float, default=1E-5,
                         help='The weight decay of the throuphput model.')
-    parser.add_argument('--batch_size', type=int, default=512,
+    parser.add_argument('--batch_size', type=int, default=128,
                         help='The batch size')
     parser.add_argument('--niter', type=int, default=10000,
                         help='The total number of training iterations.')
     parser.add_argument('--nval_iter', type=int, default=1000,
                         help='The number of validation iterations.')
-    parser.add_argument('--delta_thrpt', type=float, default=5)
+    parser.add_argument('--threshold', type=float, default=5)
+    parser.add_argument('--gpu', action='store_true')
     args = parser.parse_args()
     return args
 
@@ -68,7 +71,15 @@ def get_data(args):
     return train_df, test_df
 
 
+def get_feature_label(df):
+    feature_keys = [ele for ele in train_df.keys() if ele != 'thrpt']
+    features = df[feature_keys].to_numpy()
+    labels = df['thrpt'].to_numpy()
+    return features, labels
+
+
 def train_regression_autogluon(train_df, test_df):
+    from autogluon import TabularPrediction as task
     predictor = task.fit(train_data=task.Dataset(df=train_df),
                          output_directory=args.out_dir, label='thrpt')
     performance = predictor.evaluate(test_df)
@@ -81,6 +92,18 @@ def train_regression_autogluon(train_df, test_df):
     df_result.to_csv(os.path.join(args.out_dir, 'pred_result.csv'))
     plot_save_figure(gt_thrpt=test_df['thrpt'].to_numpy(),
                      pred_thrpt=test_prediction)
+
+
+def train_ranking_catboost(train_df, test_df):
+    params = {'loss_function': 'YetiRank'}
+    train_features, train_labels = get_feature_label(train_df)
+    test_features, test_labels = get_feature_label(test_df)
+    train_pool = catboost.Pool(data=train_features, label=train_labels)
+    test_pool = catboost.Pool(data=test_features, label=test_labels)
+    model = catboost.CatBoost(params)
+    model.fit(X=train_pool)
+    predict_result = model.predict(test_pool)
+    print(predict_result)
 
 
 class PerfNet(gluon.HybridBlock):
@@ -99,35 +122,105 @@ class PerfNet(gluon.HybridBlock):
         return self.layers(data)
 
 
-def evaluate_ranking(test_df):
+def evaluate_nn_ranking(test_df):
     pass
 
 
-def train_ranking(train_df, test_df):
+def get_nn_pred_scores(embed_net, regression_score_net, test_features,
+                       feat_mean, feat_std, batch_size):
+    pred_scores = []
+    for i in range(0, test_features.shape[0], batch_size):
+        batch_feature = (test_features[i:(i + batch_size)] - feat_mean) / feat_std
+        embeddings = embed_net(batch_feature)
+        scores = regression_score_net(embeddings)
+        pred_scores.extend(scores.asnumpy().to_list())
+    return pred_scores
+
+
+def train_nn(args, train_df, test_df):
+    ctx = mx.gpu() if args.gpu else mx.cpu()
+    batch_size = args.batch_size
     embed_net = PerfNet()
-    rank_score_net = nn.Dense(1, flatten=False)
+    rank_score_net = nn.Dense(3, flatten=False)
     regression_score_net = nn.Dense(1, flatten=False)
-    feature_keys = [ele for ele in train_df.keys() if ele != 'thrpt']
-    train_features = train_df[feature_keys].to_numpy()
-    train_labels = train_df['thrpt'].to_numpy()
-    test_features = test_df[feature_keys].to_numpy()
-    test_labels = test_df['thrpt'].to_numpy()
-    train_feature_mean = train_features.mean(axis=1)
-    train_feature_std = train_features.std(axis=1)
-    loss = gluon.loss.HuberLoss()
-    optimizer_params = {'learning_rate': args.lr,
-                        'wd': args.wd}
+    rank_loss_func = gluon.loss.SoftmaxCrossEntropyLoss(batch_axis=[0, 1])
+    train_features, train_labels = get_feature_label(train_df)
+    test_features, test_labels = get_feature_label(test_df)
+    feature_mean = train_features.mean(axis=0, keepdims=True)
+    feature_std = train_features.std(axis=0, keepdims=True)
+    embed_net.initialize(ctx=ctx)
+    rank_score_net.initialize(ctx=ctx)
+    regression_score_net.initialize(ctx=ctx)
+    optimizer_params = {'learning_rate': args.lr, 'wd': args.wd}
     embed_trainer = gluon.Trainer(embed_net.collect_params(), 'adam', optimizer_params)
-    rank_score_trainer = gluon.Trainer(rank_score_net.collect_params(), 'adam',
+    rank_score_trainer = gluon.Trainer(rank_score_net.collect_params(),
+                                       'adam',
                                        optimizer_params)
-    rank_score_trainer = gluon.Trainer(rank_score_net.collect_params(), 'adam',
-                                       optimizer_params)
+    regression_score_trainer = gluon.Trainer(regression_score_net.collect_params(),
+                                             'adam',
+                                             optimizer_params)
+    avg_regress_loss = 0
+    avg_regress_loss_denom = 0
+    avg_rank_loss = 0
+    avg_rank_loss_denom = 0
+    feature_mean = mx.np.array(feature_mean, dtype=np.float32, ctx=ctx)
+    feature_std = mx.np.array(feature_std, dtype=np.float32, ctx=ctx)
     for i in range(args.niter):
+        # Sample random minibatch
+        # We can later revise the algorithm to use stratified sampling
+        sample_idx = np.random.randint(0, train_features.shape[0], batch_size)
+        # Shape (batch_size, C), (batch_size)
+        batch_feature, batch_label = np.take(train_features, sample_idx, axis=0),\
+                                     np.take(train_labels, sample_idx, axis=0)
+        # 1. -threshold < score_1 - score2 < threshold, rank_label = 0
+        # 2. score_1 - score2 >= threshold, rank_label = 1
+        # 3. score_1 - score2 <= -threshold, rank_label = 2
+        # (i, j) --> score_i - score_j
+        pair_score = np.expand_dims(batch_label, axis=1) - np.expand_dims(batch_label, axis=0)
+        pair_label = np.zeros_like(pair_score, dtype=np.int32)
+        pair_label[pair_score >= args.threshold] = 1
+        pair_label[pair_score <= -args.threshold] = 2
+        batch_feature = mx.np.array(batch_feature, dtype=np.float32, ctx=ctx)
+        batch_label = mx.np.array(batch_label, dtype=np.float32, ctx=ctx)
+        pair_label = mx.np.array(pair_label, dtype=np.int32, ctx=ctx)
         with mx.autograd.record():
-            pass
+            embedding = embed_net((batch_feature - feature_mean) / feature_std)
+            pred_score = regression_score_net(embedding)
+            regress_loss = mx.np.abs(pred_score - batch_label).mean()
+            # Concatenate the embedding
+            lhs_embedding = mx.np.expand_dims(embedding, axis=1)
+            rhs_embedding = mx.np.expand_dims(embedding, axis=0)
+            lhs_embedding, rhs_embedding = mx.np.broadcast_arrays(lhs_embedding, rhs_embedding)
+            joint_embedding = mx.np.concatenate([lhs_embedding, rhs_embedding], axis=-1)
+            rank_logits = rank_score_net(joint_embedding)
+            rank_loss = rank_loss_func(rank_logits, pair_label).mean()
+            loss = regress_loss + rank_loss
+        loss.backward()
+        embed_trainer.step(1.0)
+        rank_score_trainer.step(1.0)
+        regression_score_trainer.step(1.0)
+        avg_regress_loss += regress_loss.asnumpy() * batch_size
+        avg_regress_loss_denom += batch_size
+        avg_rank_loss += rank_loss.asnumpy() * batch_size * batch_size
+        avg_rank_loss_denom += batch_size * batch_size
+        if (i + 1) % args.nval_iter == 0:
+            print('Iter:{}/{}, Train Loss Regression/Ranking={}/{}'
+                  .format(i, args.niter,
+                          avg_regress_loss / avg_regress_loss_denom,
+                          avg_rank_loss / avg_rank_loss_denom))
 
 
 if __name__ == "__main__":
     args = parse_args()
+    np.random.seed(args.seed)
+    mx.random.seed(args.seed)
+    random.seed(args.seed)
     train_df, test_df = get_data(args)
-    train_regression_autogluon(train_df, test_df)
+    if args.algo == 'auto':
+        train_regression_autogluon(train_df, test_df)
+    elif args.algo == 'cat':
+        train_ranking_catboost(train_df, test_df)
+    elif args.algo == 'nn':
+        train_nn(args, train_df, test_df)
+    else:
+        raise NotImplementedError
