@@ -174,10 +174,10 @@ def train_nn(args, train_df, test_df):
     rank_loss_func = gluon.loss.SoftmaxCrossEntropyLoss(batch_axis=[0, 1])
 
     train_dev_features, train_dev_labels = get_feature_label(train_df)
-    shuffle_idx = np.random.shuffle(len(train_dev_features))
+    shuffle_idx = np.random.shuffle(train_dev_features.shape[0])
     train_dev_features, train_dev_labels =\
         train_dev_features[shuffle_idx], train_dev_labels[shuffle_idx]
-    num_train = len(train_dev_features) - int(args.dev_ratio * len(train_dev_features))
+    num_train = train_dev_features.shape[0] - int(args.dev_ratio * train_dev_features.shape[0])
     train_features, train_labels = train_dev_features[:num_train], train_dev_labels[:num_train]
     dev_features, dev_labels = train_dev_features[num_train:], train_dev_labels[num_train:]
     test_features, test_labels = get_feature_label(test_df)
