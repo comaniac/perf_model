@@ -43,12 +43,14 @@ def parse_args():
                         help='The algorithm to use.')
     parser.add_argument('--test_ratio', type=float, default=0.2,
                         help='ratio of the test data.')
-    parser.add_argument('--lr', type=float, default=1E-3,
+    parser.add_argument('--lr', type=float, default=1E-4,
                         help='The learning rate of the throuphput model.')
     parser.add_argument('--wd', type=float, default=1E-5,
                         help='The weight decay of the throuphput model.')
     parser.add_argument('--batch_size', type=int, default=128,
                         help='The batch size')
+    parser.add_argument('--rank_npair', type=int, default=20,
+                        help='How many pairs to compare in the ranking loss.')
     parser.add_argument('--niter', type=int, default=10000,
                         help='The total number of training iterations.')
     parser.add_argument('--nval_iter', type=int, default=1000,
@@ -64,6 +66,19 @@ def get_data(args):
     # Pre-filter the invalid through-puts.
     # For these through-puts, we can directly obtain the result from the
     df = df[df['thrpt'] >= INVALID_THD]
+    used_keys = []
+    not_used_keys = []
+    for key in df.keys():
+        if key == 'thrpt':
+            used_keys.append(key)
+            continue
+        if df[key].to_numpy().std() == 0:
+            not_used_keys.append(key)
+            continue
+        else:
+            used_keys.append(key)
+    print('Original keys={}, Not used keys={}'.format(list(df.keys()), not_used_keys))
+    df = df[used_keys]
     # Split Train/Test
     num_train = int(len(df) * (1 - args.test_ratio))
     train_df = df[:num_train]
@@ -140,14 +155,15 @@ def get_nn_pred_scores(embed_net, regression_score_net, test_features,
 def train_nn(args, train_df, test_df):
     ctx = mx.gpu() if args.gpu else mx.cpu()
     batch_size = args.batch_size
-    embed_net = PerfNet()
+    embed_net = PerfNet(64, 2, 0.1)
     rank_score_net = nn.Dense(3, flatten=False)
     regression_score_net = nn.Dense(1, flatten=False)
     rank_loss_func = gluon.loss.SoftmaxCrossEntropyLoss(batch_axis=[0, 1])
+
     train_features, train_labels = get_feature_label(train_df)
     test_features, test_labels = get_feature_label(test_df)
-    feature_mean = train_features.mean(axis=0, keepdims=True)
-    feature_std = train_features.std(axis=0, keepdims=True)
+    feature_mean = train_features.mean(axis=0)
+    feature_std = train_features.std(axis=0)
     embed_net.initialize(ctx=ctx)
     rank_score_net.initialize(ctx=ctx)
     regression_score_net.initialize(ctx=ctx)
@@ -169,28 +185,34 @@ def train_nn(args, train_df, test_df):
         # Sample random minibatch
         # We can later revise the algorithm to use stratified sampling
         sample_idx = np.random.randint(0, train_features.shape[0], batch_size)
+        pair_sample_idx = np.random.randint(0, train_features.shape[0],
+                                            (batch_size, args.rank_npair))
         # Shape (batch_size, C), (batch_size)
         batch_feature, batch_label = np.take(train_features, sample_idx, axis=0),\
                                      np.take(train_labels, sample_idx, axis=0)
+        rank_pair_feature, rank_pair_label = np.take(train_features, pair_sample_idx, axis=0),\
+                                             np.take(train_labels, pair_sample_idx, axis=0)
         # 1. -threshold < score_1 - score2 < threshold, rank_label = 0
         # 2. score_1 - score2 >= threshold, rank_label = 1
         # 3. score_1 - score2 <= -threshold, rank_label = 2
         # (i, j) --> score_i - score_j
-        pair_score = np.expand_dims(batch_label, axis=1) - np.expand_dims(batch_label, axis=0)
+        pair_score = np.expand_dims(batch_label, axis=1) - rank_pair_label
         pair_label = np.zeros_like(pair_score, dtype=np.int32)
         pair_label[pair_score >= args.threshold] = 1
         pair_label[pair_score <= -args.threshold] = 2
         batch_feature = mx.np.array(batch_feature, dtype=np.float32, ctx=ctx)
         batch_label = mx.np.array(batch_label, dtype=np.float32, ctx=ctx)
+        rank_pair_feature = mx.np.array(rank_pair_feature, dtype=np.float32, ctx=ctx)
         pair_label = mx.np.array(pair_label, dtype=np.int32, ctx=ctx)
         with mx.autograd.record():
-            embedding = embed_net((batch_feature - feature_mean) / feature_std)
-            pred_score = regression_score_net(embedding)
+            lhs_embedding = embed_net((batch_feature - feature_mean) / feature_std)
+            pred_score = regression_score_net(lhs_embedding)
             regress_loss = mx.np.abs(pred_score - batch_label).mean()
+
+            rhs_embedding = embed_net((rank_pair_feature - feature_mean) / feature_std)
             # Concatenate the embedding
-            lhs_embedding = mx.np.expand_dims(embedding, axis=1)
-            rhs_embedding = mx.np.expand_dims(embedding, axis=0)
-            lhs_embedding, rhs_embedding = mx.np.broadcast_arrays(lhs_embedding, rhs_embedding)
+            lhs_embedding = mx.np.expand_dims(lhs_embedding, axis=1)
+            lhs_embedding = mx.np.broadcast_to(lhs_embedding, rhs_embedding.shape)
             joint_embedding = mx.np.concatenate([lhs_embedding, rhs_embedding], axis=-1)
             rank_logits = rank_score_net(joint_embedding)
             rank_loss = rank_loss_func(rank_logits, pair_label).mean()
@@ -205,7 +227,7 @@ def train_nn(args, train_df, test_df):
         avg_rank_loss_denom += batch_size * batch_size
         if (i + 1) % args.nval_iter == 0:
             print('Iter:{}/{}, Train Loss Regression/Ranking={}/{}'
-                  .format(i, args.niter,
+                  .format(i + 1, args.niter,
                           avg_regress_loss / avg_regress_loss_denom,
                           avg_rank_loss / avg_rank_loss_denom))
 
