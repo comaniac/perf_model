@@ -43,6 +43,8 @@ def parse_args():
                         help='The algorithm to use.')
     parser.add_argument('--test_ratio', type=float, default=0.2,
                         help='ratio of the test data.')
+    parser.add_argument('--dev_ratio', type=float, default=0.2,
+                        help='ratio of the test data.')
     parser.add_argument('--lr', type=float, default=1E-4,
                         help='The learning rate of the throuphput model.')
     parser.add_argument('--wd', type=float, default=1E-5,
@@ -137,10 +139,6 @@ class PerfNet(gluon.HybridBlock):
         return self.layers(data)
 
 
-def evaluate_nn_ranking(test_df):
-    pass
-
-
 def get_nn_pred_scores(embed_net, regression_score_net, test_features,
                        feat_mean, feat_std, batch_size):
     pred_scores = []
@@ -152,15 +150,36 @@ def get_nn_pred_scores(embed_net, regression_score_net, test_features,
     return pred_scores
 
 
+def evaluate_nn(test_features, test_labels, embed_net, regression_score_net, rank_score_net):
+    pass
+
+
 def train_nn(args, train_df, test_df):
     ctx = mx.gpu() if args.gpu else mx.cpu()
     batch_size = args.batch_size
     embed_net = PerfNet(64, 2, 0.1)
-    rank_score_net = nn.Dense(3, flatten=False)
-    regression_score_net = nn.Dense(1, flatten=False)
+    rank_score_net = nn.HybridSequential()
+    with rank_score_net.name_scope():
+        rank_score_net.add(nn.Dense(32, flatten=False))
+        rank_score_net.add(nn.LeakyReLU(0.1))
+        rank_score_net.add(nn.Dense(3, flatten=False))
+    regression_score_net = nn.HybridSequential()
+    with regression_score_net.name_scope():
+        regression_score_net.add(nn.Dense(32, flatten=False))
+        rank_score_net.add(nn.LeakyReLU(0.1))
+        regression_score_net = nn.Dense(1, flatten=False)
+    embed_net.hybridize()
+    rank_score_net.hybridize()
+    regression_score_net.hybridize()
     rank_loss_func = gluon.loss.SoftmaxCrossEntropyLoss(batch_axis=[0, 1])
 
-    train_features, train_labels = get_feature_label(train_df)
+    train_dev_features, train_dev_labels = get_feature_label(train_df)
+    shuffle_idx = np.random.shuffle(len(train_dev_features))
+    train_dev_features, train_dev_labels =\
+        train_dev_features[shuffle_idx], train_dev_labels[shuffle_idx]
+    num_train = len(train_dev_features) - int(args.dev_ratio * len(train_dev_features))
+    train_features, train_labels = train_dev_features[:num_train], train_dev_labels[:num_train]
+    dev_features, dev_labels = train_dev_features[num_train:], train_dev_labels[num_train:]
     test_features, test_labels = get_feature_label(test_df)
     feature_mean = train_features.mean(axis=0)
     feature_std = train_features.std(axis=0)
@@ -213,7 +232,9 @@ def train_nn(args, train_df, test_df):
             # Concatenate the embedding
             lhs_embedding = mx.np.expand_dims(lhs_embedding, axis=1)
             lhs_embedding = mx.np.broadcast_to(lhs_embedding, rhs_embedding.shape)
-            joint_embedding = mx.np.concatenate([lhs_embedding, rhs_embedding], axis=-1)
+            joint_embedding = mx.np.concatenate([lhs_embedding, rhs_embedding,
+                                                 mx.np.abs(lhs_embedding - rhs_embedding),
+                                                 lhs_embedding * rhs_embedding], axis=-1)
             rank_logits = rank_score_net(joint_embedding)
             rank_loss = rank_loss_func(rank_logits, pair_label).mean()
             loss = regress_loss + rank_loss
