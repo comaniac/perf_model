@@ -224,11 +224,11 @@ def train_nn(args, train_df, test_df):
         rank_pair_feature = mx.np.array(rank_pair_feature, dtype=np.float32, ctx=ctx)
         pair_label = mx.np.array(pair_label, dtype=np.int32, ctx=ctx)
         with mx.autograd.record():
-            lhs_embedding = embed_net((batch_feature - feature_mean) / feature_std)
+            lhs_embedding = embed_net((batch_feature - feature_mean))# / feature_std)
             pred_score = regression_score_net(lhs_embedding)
             regress_loss = mx.np.abs(pred_score - batch_label).mean()
 
-            rhs_embedding = embed_net((rank_pair_feature - feature_mean) / feature_std)
+            rhs_embedding = embed_net((rank_pair_feature - feature_mean))# / feature_std)
             # Concatenate the embedding
             lhs_embedding = mx.np.expand_dims(lhs_embedding, axis=1)
             lhs_embedding = mx.np.broadcast_to(lhs_embedding, rhs_embedding.shape)
