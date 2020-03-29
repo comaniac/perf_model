@@ -45,9 +45,9 @@ def parse_args():
                         help='ratio of the test data.')
     parser.add_argument('--dev_ratio', type=float, default=0.2,
                         help='ratio of the test data.')
-    parser.add_argument('--lr', type=float, default=1E-3,
+    parser.add_argument('--lr', type=float, default=1E-2,
                         help='The learning rate of the throuphput model.')
-    parser.add_argument('--wd', type=float, default=1E-5,
+    parser.add_argument('--wd', type=float, default=0.0,
                         help='The weight decay of the throuphput model.')
     parser.add_argument('--batch_size', type=int, default=128,
                         help='The batch size')
