@@ -252,6 +252,7 @@ def train_nn(args, train_df, test_df):
     avg_rank_score_net_norm = 0
     avg_regression_score_net_norm = 0
     avg_norm_iter = 0
+    best_val_acc = 0
     for i in range(args.niter):
         # Sample random minibatch
         # We can later revise the algorithm to use stratified sampling
@@ -334,6 +335,12 @@ def train_nn(args, train_df, test_df):
                                  gt_label_distribution[0] / pair_label_total * 100,
                                  gt_label_distribution[1] / pair_label_total * 100,
                                  gt_label_distribution[2] / pair_label_total * 100))
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                embed_net.save_parameters(os.path.join(args.out_dir,
+                                                       'embed_net_iter{}.params'.format(i + 1)))
+                rank_score_net.save_parameters(os.path.join(args.out_dir,
+                                                       'rank_score_net_iter{}.params'.format(i + 1)))
 
 
 if __name__ == "__main__":
