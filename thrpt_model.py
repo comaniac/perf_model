@@ -61,8 +61,8 @@ def parse_args():
     parser.add_argument('--alpha', type=float, default=0.01,
                         help='Control the regression loss and the ranking loss')
     parser.add_argument('--threshold', type=float, default=5)
-    parser.add_argument('--num_hidden', type=int, default=256)
-    parser.add_argument('--num_layers', type=int, default=3)
+    parser.add_argument('--num_hidden', type=int, default=512)
+    parser.add_argument('--num_layers', type=int, default=2)
     parser.add_argument('--dropout', type=float, default=0.05)
     parser.add_argument('--gpu', action='store_true')
     args = parser.parse_args()
@@ -208,8 +208,6 @@ def train_nn(args, train_df, test_df):
     avg_rank_score_net_norm = 0
     avg_regression_score_net_norm = 0
     avg_norm_iter = 0
-    feature_mean = mx.np.array(feature_mean, dtype=np.float32, ctx=ctx)
-    feature_std = mx.np.array(feature_std, dtype=np.float32, ctx=ctx)
     for i in range(args.niter):
         # Sample random minibatch
         # We can later revise the algorithm to use stratified sampling
