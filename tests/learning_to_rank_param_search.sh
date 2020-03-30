@@ -3,7 +3,7 @@ i=0
 
 for num_hidden in 32 64 128 256
 do
-  for num_layers in 1 2 3
+  for num_layers in 1 2 3 4
   do
     for threshold in 1 5 10
     do
