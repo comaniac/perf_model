@@ -208,7 +208,7 @@ def evaluate_nn(test_features, test_labels, embed_net, regression_score_net,
 
 
 def train_nn(args, train_df, test_df):
-    ctx = parse_ctx(args.gpus)
+    ctx = parse_ctx(args.gpus)[0]
     batch_size = args.batch_size
     embed_net = PerfNet(args.num_hidden, args.num_layers, args.dropout)
     rank_score_net = nn.HybridSequential()
