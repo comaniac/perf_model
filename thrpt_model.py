@@ -148,9 +148,8 @@ class PerfNet(gluon.HybridBlock):
             with self.layers.name_scope():
                 for i in range(num_layer):
                     self.layers.add(nn.Dense(num_hidden, flatten=False))
-                    if i != num_layer - 1:
-                        self.layers.add(nn.LeakyReLU(0.1))
-                        self.layers.add(nn.Dropout(dropout))
+                    self.layers.add(nn.LeakyReLU(0.1))
+                    self.layers.add(nn.Dropout(dropout))
 
     def hybrid_forward(self, F, data):
         return self.layers(data)
@@ -287,7 +286,7 @@ def train_nn(args, train_df, test_df):
         with mx.autograd.record():
             lhs_embedding = embed_net(batch_feature)
             pred_score = regression_score_net(lhs_embedding)
-            regress_loss = mx.np.abs(pred_score - mx.np.log(1 + batch_label)).mean()
+            regress_loss = mx.np.abs(pred_score - batch_label).mean()
 
             rhs_embedding = embed_net(rank_pair_feature)
             # Concatenate the embedding
@@ -372,6 +371,8 @@ def train_nn(args, train_df, test_df):
                         break
                     curr_lr = max(curr_lr / 2, 1E-5)
                     embed_trainer.set_learning_rate(curr_lr)
+                    regression_score_trainer.set_learning_rate(curr_lr)
+                    rank_score_trainer.set_learning_rate(curr_lr)
                     logging.info('Decrease learning rate to {}'.format(curr_lr))
                     no_better_val_cnt = 0
     best_val_loss_f.close()
