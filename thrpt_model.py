@@ -45,7 +45,7 @@ def parse_args():
                         help='ratio of the test data.')
     parser.add_argument('--dev_ratio', type=float, default=0.2,
                         help='ratio of the test data.')
-    parser.add_argument('--lr', type=float, default=1E-2,
+    parser.add_argument('--lr', type=float, default=1E-3,
                         help='The learning rate of the throuphput model.')
     parser.add_argument('--wd', type=float, default=0.0,
                         help='The weight decay of the throuphput model.')
@@ -53,10 +53,12 @@ def parse_args():
                         help='The batch size')
     parser.add_argument('--rank_npair', type=int, default=20,
                         help='How many pairs to compare in the ranking loss.')
-    parser.add_argument('--niter', type=int, default=10000,
+    parser.add_argument('--niter', type=int, default=1000000,
                         help='The total number of training iterations.')
     parser.add_argument('--nval_iter', type=int, default=1000,
                         help='The number of validation iterations.')
+    parser.add_argument('--alpha', type=float, default=0.01,
+                        help='Control the regression loss and the ranking loss')
     parser.add_argument('--threshold', type=float, default=5)
     parser.add_argument('--gpu', action='store_true')
     args = parser.parse_args()
@@ -237,7 +239,7 @@ def train_nn(args, train_df, test_df):
                                                  lhs_embedding * rhs_embedding], axis=-1)
             rank_logits = rank_score_net(joint_embedding)
             rank_loss = rank_loss_func(rank_logits, pair_label).mean()
-            loss = regress_loss + rank_loss
+            loss = regress_loss + args.alpha * rank_loss
         loss.backward()
         embed_trainer.step(1.0)
         rank_score_trainer.step(1.0)
