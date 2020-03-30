@@ -113,7 +113,7 @@ def train_regression_autogluon(train_df, test_df):
     from autogluon import TabularPrediction as task
     predictor = task.fit(train_data=task.Dataset(df=train_df),
                          output_directory=args.out_dir, label='thrpt',
-                         objective_func='mean_absolute_error')
+                         eval_metric='mean_absolute_error')
     performance = predictor.evaluate(test_df)
     test_prediction = predictor.predict(test_df)
     ret = np.zeros((len(test_prediction), 2), dtype=np.float32)
