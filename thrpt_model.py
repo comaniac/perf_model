@@ -269,7 +269,6 @@ def train_nn(args, train_df, test_df):
                   .format(i + 1, args.niter,
                           avg_regress_loss / avg_regress_loss_denom,
                           avg_rank_loss / avg_rank_loss_denom,
-                          avg_embed_net_norm / args.nval_iter,
                           avg_embed_net_norm / avg_norm_iter,
                           avg_regression_score_net_norm / avg_norm_iter,
                           avg_rank_score_net_norm / avg_norm_iter))
