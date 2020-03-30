@@ -286,7 +286,7 @@ def train_nn(args, train_df, test_df):
         pair_label = mx.np.array(pair_label, dtype=np.int32, ctx=ctx)
         with mx.autograd.record():
             lhs_embedding = embed_net(batch_feature)
-            pred_score = regression_score_net(lhs_embedding)
+            pred_score = regression_score_net(lhs_embedding)[:, 0]
             regress_loss = mx.np.abs(pred_score - batch_label).mean()
 
             rhs_embedding = embed_net(rank_pair_feature)
