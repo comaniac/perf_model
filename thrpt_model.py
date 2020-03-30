@@ -9,7 +9,7 @@ import mxnet as mx
 from mxnet import gluon
 from mxnet.gluon import nn
 from numpy_nlp.utils.parameter import grad_global_norm
-from numpy_nlp.utils.misc import logging_config, set_seed
+from numpy_nlp.utils.misc import logging_config, set_seed, parse_ctx
 import matplotlib.pyplot as plt
 
 mx.npx.set_np()
@@ -53,11 +53,11 @@ def parse_args():
                         help='The learning rate of the throuphput model.')
     parser.add_argument('--wd', type=float, default=0.0,
                         help='The weight decay of the throuphput model.')
-    parser.add_argument('--batch_size', type=int, default=128,
+    parser.add_argument('--batch_size', type=int, default=256,
                         help='The batch size')
     parser.add_argument('--rank_npair', type=int, default=20,
                         help='How many pairs to compare in the ranking loss.')
-    parser.add_argument('--niter', type=int, default=1000000,
+    parser.add_argument('--niter', type=int, default=10000000,
                         help='The total number of training iterations.')
     parser.add_argument('--log_interval', type=int, default=1000,
                         help='The logging interval.')
@@ -71,7 +71,8 @@ def parse_args():
     parser.add_argument('--num_hidden', type=int, default=256)
     parser.add_argument('--num_layers', type=int, default=2)
     parser.add_argument('--dropout', type=float, default=0.1)
-    parser.add_argument('--gpu', action='store_true')
+    parser.add_argument('--gpus', type=str, default='0',
+                        help='list of gpus to run, e.g. 0 or 0,2,5. -1 means using cpu.')
     args = parser.parse_args()
     return args
 
@@ -207,7 +208,7 @@ def evaluate_nn(test_features, test_labels, embed_net, regression_score_net,
 
 
 def train_nn(args, train_df, test_df):
-    ctx = mx.gpu() if args.gpu else mx.cpu()
+    ctx = parse_ctx(args.gpus)
     batch_size = args.batch_size
     embed_net = PerfNet(args.num_hidden, args.num_layers, args.dropout)
     rank_score_net = nn.HybridSequential()
@@ -253,6 +254,8 @@ def train_nn(args, train_df, test_df):
     avg_regression_score_net_norm = 0
     avg_norm_iter = 0
     best_val_acc = 0
+    no_better_val_cnt = 0
+    curr_lr = args.lr
     for i in range(args.niter):
         # Sample random minibatch
         # We can later revise the algorithm to use stratified sampling
@@ -336,11 +339,20 @@ def train_nn(args, train_df, test_df):
                                  gt_label_distribution[1] / pair_label_total * 100,
                                  gt_label_distribution[2] / pair_label_total * 100))
             if val_acc > best_val_acc:
+                no_better_val_cnt = 0
                 best_val_acc = val_acc
                 embed_net.save_parameters(os.path.join(args.out_dir,
                                                        'embed_net_iter{}.params'.format(i + 1)))
                 rank_score_net.save_parameters(os.path.join(args.out_dir,
                                                        'rank_score_net_iter{}.params'.format(i + 1)))
+            else:
+                no_better_val_cnt += 1
+                if no_better_val_cnt > 5:
+                    if curr_lr == 1E-5:
+                        break
+                    curr_lr = max(curr_lr / 2, 1E-5)
+                    embed_trainer.set_learning_rate(curr_lr)
+                    logging.info('Decrease learning rate to {}'.format(curr_lr))
 
 
 if __name__ == "__main__":
