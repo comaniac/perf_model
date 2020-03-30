@@ -201,7 +201,9 @@ def evaluate_nn(test_features, test_labels, embed_net, regression_score_net,
                           == pair_label).sum()
             n_total += np.prod(pair_label.shape)
             total_nll += -logits.sum()
-    return total_nll / n_total, n_correct / n_total, n_correct, n_total
+            for k in range(3):
+                gt_label_distribution[k] += (pair_label == k).sum()
+    return total_nll / n_total, n_correct / n_total, n_correct, n_total, gt_label_distribution
 
 
 def train_nn(args, train_df, test_df):
@@ -321,11 +323,17 @@ def train_nn(args, train_df, test_df):
             avg_regression_score_net_norm = 0
             avg_norm_iter = 0
         if (i + 1) % args.nval_iter == 0:
-            val_nll, val_acc, n_correct, n_total =\
+            val_nll, val_acc, n_correct, n_total, gt_label_distribution =\
                 evaluate_nn(dev_features, dev_labels, embed_net, regression_score_net,
                             rank_score_net, batch_size, args.num_hidden, ctx, args.threshold)
-            logging.info('Validation error: nll={}, acc={}, correct/total={}/{}'
-                         .format(val_nll, val_acc, n_correct, n_total))
+            pair_label_total = gt_label_distribution.sum()
+            logging.info('Validation error: nll={}, acc={},'
+                         ' correct/total={}/{},'
+                         ' dev distribution equal: {:.2f}, lhs>rhs: {:.2f}, lhs<rhs: {:.2f}'
+                         .format(val_nll, val_acc, n_correct, n_total,
+                                 gt_label_distribution[0] / pair_label_total * 100,
+                                 gt_label_distribution[1] / pair_label_total * 100,
+                                 gt_label_distribution[2] / pair_label_total * 100))
 
 
 if __name__ == "__main__":
