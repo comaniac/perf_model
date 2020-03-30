@@ -68,9 +68,9 @@ def parse_args():
     parser.add_argument('--rank_alpha', type=float, default=1.0,
                         help='Control the weight of the ranking loss')
     parser.add_argument('--threshold', type=float, default=5)
-    parser.add_argument('--num_hidden', type=int, default=512)
+    parser.add_argument('--num_hidden', type=int, default=256)
     parser.add_argument('--num_layers', type=int, default=2)
-    parser.add_argument('--dropout', type=float, default=0.05)
+    parser.add_argument('--dropout', type=float, default=0.1)
     parser.add_argument('--gpu', action='store_true')
     args = parser.parse_args()
     return args
@@ -175,6 +175,7 @@ def evaluate_nn(test_features, test_labels, embed_net, regression_score_net,
     n_correct = 0
     n_total = 0
     total_nll = 0
+    gt_label_distribution = np.zeros(shape=(3,), dtype=np.int64)
     for i in range(0, n_samples, batch_size):
         lhs_embeddings = embeddings[i:(i + batch_size)]
         lhs_labels = test_labels[i:(i + batch_size)]
