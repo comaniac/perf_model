@@ -1,11 +1,11 @@
 NUM_GPU=8
 i=0
 
-for num_hidden in 64 128 256
+for num_hidden in 128 256 512
 do
-  for num_layers in 1 2 3
+  for num_layers in 2 3
   do
-    for dropout in 0.1 0.2
+    for dropout in 0.05 0.1
     do
       for threshold in 1 5
       do

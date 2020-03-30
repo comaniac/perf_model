@@ -256,6 +256,7 @@ def train_nn(args, train_df, test_df):
     best_val_acc = 0
     no_better_val_cnt = 0
     curr_lr = args.lr
+    best_val_loss_f = open(os.path.join(args.out_dir, 'best_val_acc.csv'), 'w')
     for i in range(args.niter):
         # Sample random minibatch
         # We can later revise the algorithm to use stratified sampling
@@ -345,6 +346,7 @@ def train_nn(args, train_df, test_df):
                     args.out_dir, 'embed_net_best.params'.format(i + 1)))
                 rank_score_net.save_parameters(os.path.join(
                     args.out_dir, 'rank_score_net_best.params'.format(i + 1)))
+                best_val_loss_f.write('{}, {}\n'.format(i + 1, best_val_acc))
             else:
                 no_better_val_cnt += 1
                 if no_better_val_cnt > 5:
@@ -354,6 +356,7 @@ def train_nn(args, train_df, test_df):
                     embed_trainer.set_learning_rate(curr_lr)
                     logging.info('Decrease learning rate to {}'.format(curr_lr))
                     no_better_val_cnt = 0
+    best_val_loss_f.close()
 
 
 if __name__ == "__main__":
