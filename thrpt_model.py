@@ -353,6 +353,7 @@ def train_nn(args, train_df, test_df):
                     curr_lr = max(curr_lr / 2, 1E-5)
                     embed_trainer.set_learning_rate(curr_lr)
                     logging.info('Decrease learning rate to {}'.format(curr_lr))
+                    no_better_val_cnt = 0
 
 
 if __name__ == "__main__":
