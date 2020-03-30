@@ -7,6 +7,7 @@ import os
 import mxnet as mx
 from mxnet import gluon
 from mxnet.gluon import nn
+from numpy_nlp.utils.parameter import grad_global_norm
 import matplotlib.pyplot as plt
 
 mx.npx.set_np()
@@ -171,7 +172,7 @@ def train_nn(args, train_df, test_df):
     regression_score_net = nn.HybridSequential()
     with regression_score_net.name_scope():
         regression_score_net.add(nn.Dense(32, flatten=False))
-        rank_score_net.add(nn.LeakyReLU(0.1))
+        regression_score_net.add(nn.LeakyReLU(0.1))
         regression_score_net = nn.Dense(1, flatten=False)
     embed_net.hybridize()
     rank_score_net.hybridize()
@@ -188,9 +189,9 @@ def train_nn(args, train_df, test_df):
     test_features, test_labels = get_feature_label(test_df)
     feature_mean = train_features.mean(axis=0)
     feature_std = train_features.std(axis=0)
-    embed_net.initialize(ctx=ctx)
-    rank_score_net.initialize(ctx=ctx)
-    regression_score_net.initialize(ctx=ctx)
+    embed_net.initialize(init=mx.init.Normal(0.01), ctx=ctx)
+    rank_score_net.initialize(init=mx.init.Normal(0.01), ctx=ctx)
+    regression_score_net.initialize(init=mx.init.Normal(0.01), ctx=ctx)
     optimizer_params = {'learning_rate': args.lr, 'wd': args.wd}
     embed_trainer = gluon.Trainer(embed_net.collect_params(), 'adam', optimizer_params)
     rank_score_trainer = gluon.Trainer(rank_score_net.collect_params(),
@@ -203,6 +204,10 @@ def train_nn(args, train_df, test_df):
     avg_regress_loss_denom = 0
     avg_rank_loss = 0
     avg_rank_loss_denom = 0
+    avg_embed_net_norm = 0
+    avg_rank_score_net_norm = 0
+    avg_regression_score_net_norm = 0
+    avg_norm_iter = 0
     feature_mean = mx.np.array(feature_mean, dtype=np.float32, ctx=ctx)
     feature_std = mx.np.array(feature_std, dtype=np.float32, ctx=ctx)
     for i in range(args.niter):
@@ -244,6 +249,13 @@ def train_nn(args, train_df, test_df):
             rank_loss = rank_loss_func(rank_logits, pair_label).mean()
             loss = regress_loss + args.alpha * rank_loss
         loss.backward()
+        embed_net_norm = grad_global_norm(embed_net.collect_params().values())
+        rank_score_net_norm = grad_global_norm(rank_score_net.collect_params().values())
+        regression_score_net_norm = grad_global_norm(regression_score_net.collect_params().values())
+        avg_embed_net_norm += embed_net_norm
+        avg_rank_score_net_norm += rank_score_net_norm
+        avg_regression_score_net_norm += regression_score_net_norm
+        avg_norm_iter += 1
         embed_trainer.step(1.0)
         rank_score_trainer.step(1.0)
         regression_score_trainer.step(1.0)
@@ -252,14 +264,23 @@ def train_nn(args, train_df, test_df):
         avg_rank_loss += rank_loss.asnumpy() * batch_size * batch_size
         avg_rank_loss_denom += batch_size * batch_size
         if (i + 1) % args.nval_iter == 0:
-            print('Iter:{}/{}, Train Loss Regression/Ranking={}/{}'
+            print('Iter:{}/{}, Train Loss Regression/Ranking={}/{}, '
+                  'grad_norm Embed/Regression/Rank={}/{}/{}'
                   .format(i + 1, args.niter,
                           avg_regress_loss / avg_regress_loss_denom,
-                          avg_rank_loss / avg_rank_loss_denom))
+                          avg_rank_loss / avg_rank_loss_denom,
+                          avg_embed_net_norm / args.nval_iter,
+                          avg_embed_net_norm / avg_norm_iter,
+                          avg_regression_score_net_norm / avg_norm_iter,
+                          avg_rank_score_net_norm / avg_norm_iter))
             avg_regress_loss = 0
             avg_regress_loss_denom = 0
             avg_rank_loss = 0
             avg_rank_loss_denom = 0
+            avg_embed_net_norm = 0
+            avg_rank_score_net_norm = 0
+            avg_regression_score_net_norm = 0
+            avg_norm_iter = 0
 
 
 if __name__ == "__main__":
