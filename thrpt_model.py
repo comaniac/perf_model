@@ -8,6 +8,7 @@ import mxnet as mx
 from mxnet import gluon
 from mxnet.gluon import nn
 from numpy_nlp.utils.parameter import grad_global_norm
+from numpy_nlp.utils.misc import logging_config, set_seed
 import matplotlib.pyplot as plt
 
 mx.npx.set_np()
@@ -283,9 +284,8 @@ def train_nn(args, train_df, test_df):
 
 if __name__ == "__main__":
     args = parse_args()
-    np.random.seed(args.seed)
-    mx.random.seed(args.seed)
-    random.seed(args.seed)
+    set_seed(args.seed)
+    logging_config(args.out_dir)
     train_df, test_df = get_data(args)
     if args.algo == 'auto':
         train_regression_autogluon(train_df, test_df)
