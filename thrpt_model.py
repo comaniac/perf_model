@@ -62,7 +62,7 @@ def parse_args():
                         help='The logging interval.')
     parser.add_argument('--nval_iter', type=int, default=10000,
                         help='The number of iterations per validation.')
-    parser.add_argument('--regress_alpha', type=float, default=0.0,
+    parser.add_argument('--regress_alpha', type=float, default=1.0,
                         help='Control the weight of the regression loss')
     parser.add_argument('--rank_alpha', type=float, default=1.0,
                         help='Control the weight of the ranking loss')
@@ -156,18 +156,18 @@ class PerfNet(gluon.HybridBlock):
         return self.layers(data)
 
 
-def get_nn_pred_scores(embed_net, regression_score_net, test_features,
+def get_nn_pred_scores(embed_net, regression_thrpt_net, test_features,
                        feat_mean, feat_std, batch_size):
     pred_scores = []
     for i in range(0, test_features.shape[0], batch_size):
         batch_feature = (test_features[i:(i + batch_size)] - feat_mean) / feat_std
         embeddings = embed_net(batch_feature)
-        scores = regression_score_net(embeddings)
+        scores = regression_thrpt_net(embeddings)
         pred_scores.extend(scores.asnumpy().to_list())
     return pred_scores
 
 
-def evaluate_nn(test_features, test_labels, embed_net, regression_score_net,
+def evaluate_nn(test_features, test_labels, embed_net, regression_thrpt_net,
                 rank_score_net, batch_size, num_hidden, ctx, threshold):
     n_samples = test_features.shape[0]
     embeddings = mx.np.zeros(shape=(n_samples, num_hidden), dtype=np.float32, ctx=ctx)
@@ -175,6 +175,15 @@ def evaluate_nn(test_features, test_labels, embed_net, regression_score_net,
         batch_features = mx.np.array(test_features[i:(i + batch_size)], dtype=np.float32,
                                      ctx=ctx)
         embeddings[i:(i + batch_size), :] = embed_net(batch_features)
+    # Calculate regression scores
+    total_mae = 0
+    total_mae_cnt = 0
+    for i in range(0, n_samples, batch_size):
+        batch_embeddings = embeddings[i:(i + batch_size)]
+        batch_labels = test_labels[i:(i + batch_size)]
+        batch_pred_thrpt = regression_thrpt_net(batch_embeddings)[:, 0]
+        total_mae += (batch_pred_thrpt - batch_labels).sum()
+        total_mae_cnt += batch_labels.shape[0]
     # Calculate ranking scores
     n_correct = 0
     n_total = 0
@@ -207,26 +216,26 @@ def evaluate_nn(test_features, test_labels, embed_net, regression_score_net,
             total_nll += -logits.sum()
             for k in range(3):
                 gt_label_distribution[k] += (pair_label == k).sum()
-    return total_nll / n_total, n_correct / n_total, n_correct, n_total, gt_label_distribution
+    return total_nll / n_total, total_mae / total_mae_cnt, n_correct / n_total, n_correct, n_total, gt_label_distribution
 
 
 def train_nn(args, train_df, test_df):
     ctx = parse_ctx(args.gpus)[0]
     batch_size = args.batch_size
-    embed_net = PerfNet(args.num_hidden, args.num_layers, args.dropout)
-    rank_score_net = nn.HybridSequential()
+    embed_net = PerfNet(args.num_hidden, args.num_layers, args.dropout, prefix='embed_net_')
+    rank_score_net = nn.HybridSequential(prefix='rank_score_net_')
     with rank_score_net.name_scope():
         rank_score_net.add(nn.Dense(args.num_hidden, flatten=False))
         rank_score_net.add(nn.LeakyReLU(0.1))
         rank_score_net.add(nn.Dense(3, flatten=False))
-    regression_score_net = nn.HybridSequential()
-    with regression_score_net.name_scope():
-        regression_score_net.add(nn.Dense(args.num_hidden, flatten=False))
-        regression_score_net.add(nn.LeakyReLU(0.1))
-        regression_score_net = nn.Dense(1, flatten=False)
+    regression_thrpt_net = nn.HybridSequential(prefix='regression_thrpt_net_')
+    with regression_thrpt_net.name_scope():
+        regression_thrpt_net.add(nn.Dense(args.num_hidden, flatten=False))
+        regression_thrpt_net.add(nn.LeakyReLU(0.1))
+        regression_thrpt_net = nn.Dense(1, flatten=False)
     embed_net.hybridize()
     rank_score_net.hybridize()
-    regression_score_net.hybridize()
+    regression_thrpt_net.hybridize()
     rank_loss_func = gluon.loss.SoftmaxCrossEntropyLoss(batch_axis=[0, 1])
 
     train_dev_features, train_dev_labels = get_feature_label(train_df)
@@ -239,13 +248,13 @@ def train_nn(args, train_df, test_df):
     test_features, test_labels = get_feature_label(test_df)
     embed_net.initialize(init=mx.init.Normal(0.01), ctx=ctx)
     rank_score_net.initialize(init=mx.init.Normal(0.01), ctx=ctx)
-    regression_score_net.initialize(init=mx.init.Normal(0.01), ctx=ctx)
+    regression_thrpt_net.initialize(init=mx.init.Normal(0.01), ctx=ctx)
     optimizer_params = {'learning_rate': args.lr, 'wd': args.wd}
     embed_trainer = gluon.Trainer(embed_net.collect_params(), 'adam', optimizer_params)
     rank_score_trainer = gluon.Trainer(rank_score_net.collect_params(),
                                        'adam',
                                        optimizer_params)
-    regression_score_trainer = gluon.Trainer(regression_score_net.collect_params(),
+    regression_score_trainer = gluon.Trainer(regression_thrpt_net.collect_params(),
                                              'adam',
                                              optimizer_params)
     avg_regress_loss = 0
@@ -254,9 +263,9 @@ def train_nn(args, train_df, test_df):
     avg_rank_loss_denom = 0
     avg_embed_net_norm = 0
     avg_rank_score_net_norm = 0
-    avg_regression_score_net_norm = 0
+    avg_regression_thrpt_net_norm = 0
     avg_norm_iter = 0
-    best_val_acc = 0
+    best_val_loss = np.inf
     no_better_val_cnt = 0
     curr_lr = args.lr
     best_val_loss_f = open(os.path.join(args.out_dir, 'best_val_acc.csv'), 'w')
@@ -286,7 +295,7 @@ def train_nn(args, train_df, test_df):
         pair_label = mx.np.array(pair_label, dtype=np.int32, ctx=ctx)
         with mx.autograd.record():
             lhs_embedding = embed_net(batch_feature)
-            pred_score = regression_score_net(lhs_embedding)[:, 0]
+            pred_score = regression_thrpt_net(lhs_embedding)[:, 0]
             regress_loss = mx.np.abs(pred_score - batch_label).mean()
 
             rhs_embedding = embed_net(rank_pair_feature)
@@ -302,10 +311,10 @@ def train_nn(args, train_df, test_df):
         loss.backward()
         embed_net_norm = grad_global_norm(embed_net.collect_params().values())
         rank_score_net_norm = grad_global_norm(rank_score_net.collect_params().values())
-        regression_score_net_norm = grad_global_norm(regression_score_net.collect_params().values())
+        regression_thrpt_net_norm = grad_global_norm(regression_thrpt_net.collect_params().values())
         avg_embed_net_norm += embed_net_norm
         avg_rank_score_net_norm += rank_score_net_norm
-        avg_regression_score_net_norm += regression_score_net_norm
+        avg_regression_thrpt_net_norm += regression_thrpt_net_norm
         avg_norm_iter += 1
         embed_trainer.step(1.0)
         rank_score_trainer.step(1.0)
@@ -321,7 +330,7 @@ def train_nn(args, train_df, test_df):
                           avg_regress_loss / avg_regress_loss_denom,
                           avg_rank_loss / avg_rank_loss_denom,
                           avg_embed_net_norm / avg_norm_iter,
-                          avg_regression_score_net_norm / avg_norm_iter,
+                          avg_regression_thrpt_net_norm / avg_norm_iter,
                           avg_rank_score_net_norm / avg_norm_iter))
             avg_regress_loss = 0
             avg_regress_loss_denom = 0
@@ -329,36 +338,37 @@ def train_nn(args, train_df, test_df):
             avg_rank_loss_denom = 0
             avg_embed_net_norm = 0
             avg_rank_score_net_norm = 0
-            avg_regression_score_net_norm = 0
+            avg_regression_thrpt_net_norm = 0
             avg_norm_iter = 0
         if (i + 1) % args.nval_iter == 0:
-            val_nll, val_acc, n_correct, n_total, gt_label_distribution =\
-                evaluate_nn(dev_features, dev_labels, embed_net, regression_score_net,
+            val_nll, val_mae, val_acc, n_correct, n_total, gt_label_distribution =\
+                evaluate_nn(dev_features, dev_labels, embed_net, regression_thrpt_net,
                             rank_score_net, batch_size, args.num_hidden, ctx, args.threshold)
             pair_label_total = gt_label_distribution.sum()
-            logging.info('Validation error: nll={}, acc={},'
+            logging.info('Validation error: nll={}, mae={}, acc={},'
                          ' correct/total={}/{},'
                          ' dev distribution equal: {:.2f}, lhs>rhs: {:.2f}, lhs<rhs: {:.2f}'
-                         .format(val_nll, val_acc, n_correct, n_total,
+                         .format(val_nll, val_mae, val_acc, n_correct, n_total,
                                  gt_label_distribution[0] / pair_label_total * 100,
                                  gt_label_distribution[1] / pair_label_total * 100,
                                  gt_label_distribution[2] / pair_label_total * 100))
-            if val_acc > best_val_acc:
+            val_loss = args.regress_alpha * val_nll + args.rank_alpha * val_mae
+            if val_loss < best_val_loss:
                 no_better_val_cnt = 0
-                best_val_acc = val_acc
+                best_val_loss = val_loss
                 embed_net.save_parameters(os.path.join(
                     args.out_dir, 'embed_net_best.params'))
                 rank_score_net.save_parameters(os.path.join(
                     args.out_dir, 'rank_score_net_best.params'))
-                best_val_loss_f.write('{}, {}, {}\n'.format(i + 1, best_val_acc, val_nll))
-                test_nll, test_acc, test_n_correct, test_n_total, test_gt_label_distribution = \
-                    evaluate_nn(test_features, test_labels, embed_net, regression_score_net,
+                best_val_loss_f.write('{}, {}, {}, {}\n'.format(i + 1, val_acc, val_mae, val_nll))
+                test_nll, test_mae, test_acc, test_n_correct, test_n_total, test_gt_label_distribution = \
+                    evaluate_nn(test_features, test_labels, embed_net, regression_thrpt_net,
                                 rank_score_net, batch_size, args.num_hidden, ctx, args.threshold)
-                test_loss_f.write('{}, {}, {}\n'.format(i + 1, test_acc, test_nll))
-                logging.info('Test error: nll={}, acc={},'
+                test_loss_f.write('{}, {}, {}, {}\n'.format(i + 1, test_acc, test_mae, test_nll))
+                logging.info('Test error: nll={}, mae={}, acc={},'
                              ' correct/total={}/{},'
                              ' test distribution equal: {:.2f}, lhs>rhs: {:.2f}, lhs<rhs: {:.2f}'
-                             .format(test_nll, test_acc, test_n_correct, test_n_total,
+                             .format(test_nll, test_mae, test_acc, test_n_correct, test_n_total,
                                      test_gt_label_distribution[0] /
                                      test_gt_label_distribution.sum() * 100,
                                      test_gt_label_distribution[1] /
