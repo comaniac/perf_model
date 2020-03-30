@@ -14,7 +14,7 @@ cd tests; sh auto_train.sh
 ### Use AutoGluon Tabular
 
 ```bash
-python thrpt_model.py --dataset depthwise_conv2d_nchw.cuda-cuda-model-t4.csv --algo auto
+python thrpt_model.py --dataset depthwise_conv2d_nchw.cuda-cuda-model-t4.csv --algo auto --out_dir thrpt_autogluon
 ```
 
 ### Learning to Rank
