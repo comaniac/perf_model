@@ -182,7 +182,7 @@ def evaluate_nn(test_features, test_labels, embed_net, regression_thrpt_net,
         batch_embeddings = embeddings[i:(i + batch_size)]
         batch_labels = test_labels[i:(i + batch_size)]
         batch_pred_thrpt = regression_thrpt_net(batch_embeddings)[:, 0]
-        total_mae += (batch_pred_thrpt - batch_labels).sum()
+        total_mae += (batch_pred_thrpt - mx.np.array(batch_labels, dtype=np.float32, ctx=ctx)).sum()
         total_mae_cnt += batch_labels.shape[0]
     # Calculate ranking scores
     n_correct = 0
