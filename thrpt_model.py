@@ -109,9 +109,11 @@ def get_feature_label(df):
 
 
 def train_regression_autogluon(train_df, test_df):
+    mx.npx.reset_np()
     from autogluon import TabularPrediction as task
     predictor = task.fit(train_data=task.Dataset(df=train_df),
-                         output_directory=args.out_dir, label='thrpt')
+                         output_directory=args.out_dir, label='thrpt',
+                         objective_func='mean_absolute_error')
     performance = predictor.evaluate(test_df)
     test_prediction = predictor.predict(test_df)
     ret = np.zeros((len(test_prediction), 2), dtype=np.float32)
@@ -122,6 +124,7 @@ def train_regression_autogluon(train_df, test_df):
     df_result.to_csv(os.path.join(args.out_dir, 'pred_result.csv'))
     plot_save_figure(gt_thrpt=test_df['thrpt'].to_numpy(),
                      pred_thrpt=test_prediction)
+    mx.npx.set_np()
 
 
 def train_ranking_catboost(train_df, test_df):

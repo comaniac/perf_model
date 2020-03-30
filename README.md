@@ -20,5 +20,7 @@ python thrpt_model.py --dataset depthwise_conv2d_nchw.cuda-cuda-model-t4.csv --a
 ### Learning to Rank
 
 ```bash
-python thrpt_model.py --dataset depthwise_conv2d_nchw.cuda-cuda-model-t4.csv --algo nn --gpu
+python thrpt_model.py --dataset depthwise_conv2d_nchw.cuda-cuda-model-t4.csv --algo nn --gpus 0
 ```
+
+Also, in [tune_params](tune_params), we have included a script for parameter tuning.
