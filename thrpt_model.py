@@ -60,6 +60,9 @@ def parse_args():
     parser.add_argument('--alpha', type=float, default=0.01,
                         help='Control the regression loss and the ranking loss')
     parser.add_argument('--threshold', type=float, default=5)
+    parser.add_argument('--num_hidden', type=int, default=256)
+    parser.add_argument('--num_layers', type=int, default=3)
+    parser.add_argument('--dropout', type=float, default=0.05)
     parser.add_argument('--gpu', action='store_true')
     args = parser.parse_args()
     return args
@@ -132,7 +135,7 @@ class PerfNet(gluon.HybridBlock):
             self.layers = nn.HybridSequential()
             with self.layers.name_scope():
                 for i in range(num_layer):
-                    self.layers.add(nn.Dense(64, flatten=False))
+                    self.layers.add(nn.Dense(num_hidden, flatten=False))
                     if i != num_layer - 1:
                         self.layers.add(nn.LeakyReLU(0.1))
                         self.layers.add(nn.Dropout(dropout))
@@ -159,7 +162,7 @@ def evaluate_nn(test_features, test_labels, embed_net, regression_score_net, ran
 def train_nn(args, train_df, test_df):
     ctx = mx.gpu() if args.gpu else mx.cpu()
     batch_size = args.batch_size
-    embed_net = PerfNet(128, 3, 0.1)
+    embed_net = PerfNet(args.num_hidden, args.num_layers, args.dropout)
     rank_score_net = nn.HybridSequential()
     with rank_score_net.name_scope():
         rank_score_net.add(nn.Dense(32, flatten=False))
