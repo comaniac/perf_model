@@ -257,6 +257,7 @@ def train_nn(args, train_df, test_df):
     no_better_val_cnt = 0
     curr_lr = args.lr
     best_val_loss_f = open(os.path.join(args.out_dir, 'best_val_acc.csv'), 'w')
+    test_loss_f = open(os.path.join(args.out_dir, 'test_acc.csv'), 'w')
     for i in range(args.niter):
         # Sample random minibatch
         # We can later revise the algorithm to use stratified sampling
@@ -343,10 +344,14 @@ def train_nn(args, train_df, test_df):
                 no_better_val_cnt = 0
                 best_val_acc = val_acc
                 embed_net.save_parameters(os.path.join(
-                    args.out_dir, 'embed_net_best.params'.format(i + 1)))
+                    args.out_dir, 'embed_net_best.params'))
                 rank_score_net.save_parameters(os.path.join(
-                    args.out_dir, 'rank_score_net_best.params'.format(i + 1)))
-                best_val_loss_f.write('{}, {}\n'.format(i + 1, best_val_acc))
+                    args.out_dir, 'rank_score_net_best.params'))
+                best_val_loss_f.write('{}, {}, {}\n'.format(i + 1, best_val_acc, val_nll))
+                test_nll, test_acc, test_n_correct, test_n_total, test_gt_label_distribution = \
+                    evaluate_nn(test_features, test_labels, embed_net, regression_score_net,
+                                rank_score_net, batch_size, args.num_hidden, ctx, args.threshold)
+                test_loss_f.write('{}, {}, {}\n'.format(i + 1, test_acc, test_nll))
             else:
                 no_better_val_cnt += 1
                 if no_better_val_cnt > 5:
@@ -357,6 +362,7 @@ def train_nn(args, train_df, test_df):
                     logging.info('Decrease learning rate to {}'.format(curr_lr))
                     no_better_val_cnt = 0
     best_val_loss_f.close()
+    test_loss_f.close()
 
 
 if __name__ == "__main__":
