@@ -193,7 +193,8 @@ def evaluate_nn(test_features, test_labels, embed_net, regression_score_net,
                                                  mx.np.abs(lhs_embeddings - rhs_embeddings),
                                                  lhs_embeddings * rhs_embeddings], axis=-1)
             pred_rank_label_scores = rank_score_net(joint_embedding)
-            logits = mx.npx.pick(mx.np.log_softmax(pred_rank_label_scores), pair_label)
+            logits = mx.npx.pick(mx.npx.log_softmax(pred_rank_label_scores, axis=-1),
+                                 pair_label)
             n_correct += (pred_rank_label_scores.argmax(axis=-1) == pair_label).sum()
             n_total += np.prod(pair_label.shape)
             total_nll += -logits.sum()
