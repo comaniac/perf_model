@@ -123,7 +123,8 @@ def train_regression_autogluon(train_df, test_df):
     df_result = pd.DataFrame(ret, columns=['gt', 'pred'])
     df_result.to_csv(os.path.join(args.out_dir, 'pred_result.csv'))
     plot_save_figure(gt_thrpt=test_df['thrpt'].to_numpy(),
-                     pred_thrpt=test_prediction)
+                     pred_thrpt=test_prediction,
+                     save_dir=args.out_dir)
     mx.npx.set_np()
 
 
