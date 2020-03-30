@@ -352,6 +352,16 @@ def train_nn(args, train_df, test_df):
                     evaluate_nn(test_features, test_labels, embed_net, regression_score_net,
                                 rank_score_net, batch_size, args.num_hidden, ctx, args.threshold)
                 test_loss_f.write('{}, {}, {}\n'.format(i + 1, test_acc, test_nll))
+                logging.info('Test error: nll={}, acc={},'
+                             ' correct/total={}/{},'
+                             ' dev distribution equal: {:.2f}, lhs>rhs: {:.2f}, lhs<rhs: {:.2f}'
+                             .format(test_nll, test_acc, test_n_correct, test_n_total,
+                                     test_gt_label_distribution[0] /
+                                     test_gt_label_distribution.sum() * 100,
+                                     test_gt_label_distribution[1] /
+                                     test_gt_label_distribution.sum() * 100,
+                                     test_gt_label_distribution[2] /
+                                     test_gt_label_distribution.sum() * 100))
             else:
                 no_better_val_cnt += 1
                 if no_better_val_cnt > 5:
