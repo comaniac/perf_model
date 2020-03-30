@@ -168,7 +168,8 @@ def evaluate_nn(test_features, test_labels, embed_net, regression_score_net,
     n_samples = test_features.shape[0]
     embeddings = mx.np.zeros(shape=(n_samples, num_hidden), dtype=np.float32, ctx=ctx)
     for i in range(0, n_samples, batch_size):
-        batch_features = mx.np.array(test_features[i:(i + batch_size)], ctx=ctx)
+        batch_features = mx.np.array(test_features[i:(i + batch_size)], dtype=np.float32,
+                                     ctx=ctx)
         embeddings[i:(i + batch_size), :] = embed_net(batch_features)
     # Calculate ranking scores
     n_correct = 0
