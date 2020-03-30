@@ -41,6 +41,7 @@ def parse_args():
     parser.add_argument('--out_dir', type=str, default='thrpt_model_out',
                         help='output path of the througput model.')
     parser.add_argument('--algo', choices=['auto', 'cat', 'nn'],
+                        default='nn',
                         help='The algorithm to use.')
     parser.add_argument('--test_ratio', type=float, default=0.2,
                         help='ratio of the test data.')
