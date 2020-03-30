@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import random
 import logging
-import catboost
 import os
 import mxnet as mx
 from mxnet import gluon
@@ -126,6 +125,7 @@ def train_regression_autogluon(train_df, test_df):
 
 
 def train_ranking_catboost(train_df, test_df):
+    import catboost
     params = {'loss_function': 'YetiRank'}
     train_features, train_labels = get_feature_label(train_df)
     test_features, test_labels = get_feature_label(test_df)
