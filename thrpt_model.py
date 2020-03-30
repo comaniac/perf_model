@@ -59,10 +59,14 @@ def parse_args():
                         help='How many pairs to compare in the ranking loss.')
     parser.add_argument('--niter', type=int, default=1000000,
                         help='The total number of training iterations.')
-    parser.add_argument('--nval_iter', type=int, default=1000,
-                        help='The number of validation iterations.')
-    parser.add_argument('--alpha', type=float, default=0.01,
-                        help='Control the regression loss and the ranking loss')
+    parser.add_argument('--log_interval', type=int, default=1000,
+                        help='The logging interval.')
+    parser.add_argument('--nval_iter', type=int, default=10000,
+                        help='The number of iterations per validation.')
+    parser.add_argument('--regress_alpha', type=float, default=0.0,
+                        help='Control the weight of the regression loss')
+    parser.add_argument('--rank_alpha', type=float, default=0.01,
+                        help='Control the weight of the ranking loss')
     parser.add_argument('--threshold', type=float, default=5)
     parser.add_argument('--num_hidden', type=int, default=512)
     parser.add_argument('--num_layers', type=int, default=2)
@@ -159,8 +163,40 @@ def get_nn_pred_scores(embed_net, regression_score_net, test_features,
     return pred_scores
 
 
-def evaluate_nn(test_features, test_labels, embed_net, regression_score_net, rank_score_net):
-    pass
+def evaluate_nn(test_features, test_labels, embed_net, regression_score_net,
+                rank_score_net, batch_size, num_hidden, ctx, threshold):
+    n_samples = test_features.shape[0]
+    embeddings = mx.np.zeros(shape=(n_samples, num_hidden), dtype=np.float32, ctx=ctx)
+    for i in range(0, n_samples, batch_size):
+        batch_features = mx.np.array(test_features[i:(i + batch_size)], ctx=ctx)
+        embeddings[i:(i + batch_size), :] = embed_net(batch_features)
+    # Calculate ranking scores
+    n_correct = 0
+    n_total = 0
+    total_nll = 0
+    for i in range(0, n_samples, batch_size):
+        lhs_embeddings = embeddings[i:(i + batch_size)]
+        lhs_labels = test_labels[i:(i + batch_size)]
+        for j in range(0, n_samples, batch_size):
+            rhs_embeddings = embeddings[j:(j + batch_size)]
+            rhs_labels = test_labels[j:(j + batch_size)]
+            pair_scores = np.expand_dims(lhs_labels, axis=1) - np.expand_dims(rhs_labels, axis=0)
+            pair_label = np.zeros_like(pair_scores, dtype=np.int32)
+            pair_label[pair_scores >= threshold] = 1
+            pair_label[pair_scores <= -threshold] = 2
+            pair_label = mx.np.array(pair_label, dtype=np.int32, ctx=ctx)
+            lhs_embeddings = mx.np.expand_dims(lhs_embeddings, axis=1)
+            rhs_embeddings = mx.np.expand_dims(rhs_embeddings, axis=0)
+            lhs_embeddings, rhs_embeddings = mx.np.broadcast_arrays(lhs_embeddings, rhs_embeddings)
+            joint_embedding = mx.np.concatenate([lhs_embeddings, rhs_embeddings,
+                                                 mx.np.abs(lhs_embeddings - rhs_embeddings),
+                                                 lhs_embeddings * rhs_embeddings], axis=-1)
+            pred_rank_label_scores = rank_score_net(joint_embedding)
+            logits = mx.npx.pick(mx.np.log_softmax(pred_rank_label_scores), pair_label)
+            n_correct += (pred_rank_label_scores.argmax(axis=-1) == pair_label).sum()
+            n_total += np.prod(pair_label.shape)
+            total_nll += -logits.sum()
+    return total_nll / n_total, n_correct / n_total, n_correct, n_total
 
 
 def train_nn(args, train_df, test_df):
@@ -169,12 +205,12 @@ def train_nn(args, train_df, test_df):
     embed_net = PerfNet(args.num_hidden, args.num_layers, args.dropout)
     rank_score_net = nn.HybridSequential()
     with rank_score_net.name_scope():
-        rank_score_net.add(nn.Dense(32, flatten=False))
+        rank_score_net.add(nn.Dense(args.num_hidden, flatten=False))
         rank_score_net.add(nn.LeakyReLU(0.1))
         rank_score_net.add(nn.Dense(3, flatten=False))
     regression_score_net = nn.HybridSequential()
     with regression_score_net.name_scope():
-        regression_score_net.add(nn.Dense(32, flatten=False))
+        regression_score_net.add(nn.Dense(args.num_hidden, flatten=False))
         regression_score_net.add(nn.LeakyReLU(0.1))
         regression_score_net = nn.Dense(1, flatten=False)
     embed_net.hybridize()
@@ -190,8 +226,6 @@ def train_nn(args, train_df, test_df):
     train_features, train_labels = train_dev_features[:num_train], train_dev_labels[:num_train]
     dev_features, dev_labels = train_dev_features[num_train:], train_dev_labels[num_train:]
     test_features, test_labels = get_feature_label(test_df)
-    feature_mean = train_features.mean(axis=0)
-    feature_std = train_features.std(axis=0)
     embed_net.initialize(init=mx.init.Normal(0.01), ctx=ctx)
     rank_score_net.initialize(init=mx.init.Normal(0.01), ctx=ctx)
     regression_score_net.initialize(init=mx.init.Normal(0.01), ctx=ctx)
@@ -248,7 +282,7 @@ def train_nn(args, train_df, test_df):
                                                  lhs_embedding * rhs_embedding], axis=-1)
             rank_logits = rank_score_net(joint_embedding)
             rank_loss = rank_loss_func(rank_logits, pair_label).mean()
-            loss = regress_loss + args.alpha * rank_loss
+            loss = args.regress_alpha * regress_loss + args.rank_alpha * rank_loss
         loss.backward()
         embed_net_norm = grad_global_norm(embed_net.collect_params().values())
         rank_score_net_norm = grad_global_norm(rank_score_net.collect_params().values())
@@ -264,7 +298,7 @@ def train_nn(args, train_df, test_df):
         avg_regress_loss_denom += batch_size
         avg_rank_loss += rank_loss.asnumpy() * batch_size * batch_size
         avg_rank_loss_denom += batch_size * batch_size
-        if (i + 1) % args.nval_iter == 0:
+        if (i + 1) % args.log_interval == 0:
             logging.info('Iter:{}/{}, Train Loss Regression/Ranking={}/{}, '
                   'grad_norm Embed/Regression/Rank={}/{}/{}'
                   .format(i + 1, args.niter,
@@ -281,6 +315,12 @@ def train_nn(args, train_df, test_df):
             avg_rank_score_net_norm = 0
             avg_regression_score_net_norm = 0
             avg_norm_iter = 0
+        if (i + 1) % args.nval_iter == 0:
+            val_nll, val_acc, n_correct, n_total =\
+                evaluate_nn(dev_features, dev_labels, embed_net, regression_score_net,
+                            rank_score_net, batch_size, args.num_hidden, ctx, args.threshold)
+            logging.info('Validation error: nll={}, acc={}, correct/total={}/{}'
+                         .format(val_nll, val_acc, n_correct, n_total))
 
 
 if __name__ == "__main__":
