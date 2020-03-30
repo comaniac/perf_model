@@ -341,10 +341,10 @@ def train_nn(args, train_df, test_df):
             if val_acc > best_val_acc:
                 no_better_val_cnt = 0
                 best_val_acc = val_acc
-                embed_net.save_parameters(os.path.join(args.out_dir,
-                                                       'embed_net_iter{}.params'.format(i + 1)))
-                rank_score_net.save_parameters(os.path.join(args.out_dir,
-                                                       'rank_score_net_iter{}.params'.format(i + 1)))
+                embed_net.save_parameters(os.path.join(
+                    args.out_dir, 'embed_net_best.params'.format(i + 1)))
+                rank_score_net.save_parameters(os.path.join(
+                    args.out_dir, 'rank_score_net_best.params'.format(i + 1)))
             else:
                 no_better_val_cnt += 1
                 if no_better_val_cnt > 5:
