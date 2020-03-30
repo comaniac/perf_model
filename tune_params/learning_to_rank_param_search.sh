@@ -1,5 +1,6 @@
 NUM_GPU=8
 i=0
+DATA_PATH=../depthwise_conv2d_nchw.cuda-cuda-model-t4.csv
 
 for num_hidden in 128 256 512
 do
@@ -9,7 +10,7 @@ do
     do
       for threshold in 1 5
       do
-        screen -d -m python ../thrpt_model.py --dataset ../depthwise_conv2d_nchw.cuda-cuda-model-t4.csv \
+        screen -d -m python ../thrpt_model.py --dataset ${DATA_PATH} \
           --algo nn \
           --gpus ${i} \
           --threshold ${threshold} --num_hidden ${num_hidden} \

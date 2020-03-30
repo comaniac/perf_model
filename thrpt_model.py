@@ -354,7 +354,7 @@ def train_nn(args, train_df, test_df):
                 test_loss_f.write('{}, {}, {}\n'.format(i + 1, test_acc, test_nll))
                 logging.info('Test error: nll={}, acc={},'
                              ' correct/total={}/{},'
-                             ' dev distribution equal: {:.2f}, lhs>rhs: {:.2f}, lhs<rhs: {:.2f}'
+                             ' test distribution equal: {:.2f}, lhs>rhs: {:.2f}, lhs<rhs: {:.2f}'
                              .format(test_nll, test_acc, test_n_correct, test_n_total,
                                      test_gt_label_distribution[0] /
                                      test_gt_label_distribution.sum() * 100,
