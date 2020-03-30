@@ -11,7 +11,7 @@ do
         --algo nn \
         --gpus ${i} \
         --threshold ${threshold} --num_hidden ${num_hidden} --num_layers ${num_layers} \
-        --out_dir thrpt_nhidden${num_hidden}_nlayers${num_layers}_thres${threshold}
+        --out_dir thrpt_h${num_hidden}_l${num_layers}_tr${threshold}
       ((i=(i+1)%NUM_GPU))
     done
   done

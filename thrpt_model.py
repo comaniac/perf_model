@@ -358,7 +358,7 @@ def train_nn(args, train_df, test_df):
 if __name__ == "__main__":
     args = parse_args()
     set_seed(args.seed)
-    logging_config(args.out_dir)
+    logging_config(args.out_dir, 'thrpt_model')
     train_df, test_df = get_data(args)
     if args.algo == 'auto':
         train_regression_autogluon(train_df, test_df)
