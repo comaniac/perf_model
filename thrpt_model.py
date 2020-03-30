@@ -2,6 +2,7 @@ import argparse
 import pandas as pd
 import numpy as np
 import random
+import logging
 import catboost
 import os
 import mxnet as mx
@@ -87,7 +88,7 @@ def get_data(args):
             continue
         else:
             used_keys.append(key)
-    print('Original keys={}, Not used keys={}'.format(list(df.keys()), not_used_keys))
+    logging.info('Original keys={}, Not used keys={}'.format(list(df.keys()), not_used_keys))
     df = df[used_keys]
     # Split Train/Test
     num_train = int(len(df) * (1 - args.test_ratio))
@@ -128,7 +129,7 @@ def train_ranking_catboost(train_df, test_df):
     model = catboost.CatBoost(params)
     model.fit(X=train_pool)
     predict_result = model.predict(test_pool)
-    print(predict_result)
+    logging.info(predict_result)
 
 
 class PerfNet(gluon.HybridBlock):
@@ -264,7 +265,7 @@ def train_nn(args, train_df, test_df):
         avg_rank_loss += rank_loss.asnumpy() * batch_size * batch_size
         avg_rank_loss_denom += batch_size * batch_size
         if (i + 1) % args.nval_iter == 0:
-            print('Iter:{}/{}, Train Loss Regression/Ranking={}/{}, '
+            logging.info('Iter:{}/{}, Train Loss Regression/Ranking={}/{}, '
                   'grad_norm Embed/Regression/Rank={}/{}/{}'
                   .format(i + 1, args.niter,
                           avg_regress_loss / avg_regress_loss_denom,
