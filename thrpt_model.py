@@ -186,12 +186,13 @@ def evaluate_nn(test_features, test_labels, embed_net, regression_score_net,
             pair_label[pair_scores >= threshold] = 1
             pair_label[pair_scores <= -threshold] = 2
             pair_label = mx.np.array(pair_label, dtype=np.int32, ctx=ctx)
-            lhs_embeddings = mx.np.expand_dims(lhs_embeddings, axis=1)
+            inner_lhs_embeddings = mx.np.expand_dims(lhs_embeddings, axis=1)
             rhs_embeddings = mx.np.expand_dims(rhs_embeddings, axis=0)
-            lhs_embeddings, rhs_embeddings = mx.np.broadcast_arrays(lhs_embeddings, rhs_embeddings)
-            joint_embedding = mx.np.concatenate([lhs_embeddings, rhs_embeddings,
-                                                 mx.np.abs(lhs_embeddings - rhs_embeddings),
-                                                 lhs_embeddings * rhs_embeddings], axis=-1)
+            inner_lhs_embeddings, rhs_embeddings =\
+                mx.np.broadcast_arrays(inner_lhs_embeddings, rhs_embeddings)
+            joint_embedding = mx.np.concatenate([inner_lhs_embeddings, rhs_embeddings,
+                                                 mx.np.abs(inner_lhs_embeddings - rhs_embeddings),
+                                                 inner_lhs_embeddings * rhs_embeddings], axis=-1)
             pred_rank_label_scores = rank_score_net(joint_embedding)
             logits = mx.npx.pick(mx.npx.log_softmax(pred_rank_label_scores, axis=-1),
                                  pair_label)
