@@ -65,7 +65,7 @@ def parse_args():
                         help='The number of iterations per validation.')
     parser.add_argument('--regress_alpha', type=float, default=0.0,
                         help='Control the weight of the regression loss')
-    parser.add_argument('--rank_alpha', type=float, default=0.01,
+    parser.add_argument('--rank_alpha', type=float, default=1.0,
                         help='Control the weight of the ranking loss')
     parser.add_argument('--threshold', type=float, default=5)
     parser.add_argument('--num_hidden', type=int, default=512)
