@@ -361,10 +361,12 @@ def train_nn(args, train_df, test_df):
                 rank_score_net.save_parameters(os.path.join(
                     args.out_dir, 'rank_score_net_best.params'))
                 best_val_loss_f.write('{}, {}, {}, {}\n'.format(i + 1, val_acc, val_mae, val_nll))
+                best_val_loss_f.flush()
                 test_nll, test_mae, test_acc, test_n_correct, test_n_total, test_gt_label_distribution = \
                     evaluate_nn(test_features, test_labels, embed_net, regression_thrpt_net,
                                 rank_score_net, batch_size, args.num_hidden, ctx, args.threshold)
                 test_loss_f.write('{}, {}, {}, {}\n'.format(i + 1, test_acc, test_mae, test_nll))
+                test_loss_f.flush()
                 logging.info('Test error: nll={}, mae={}, acc={},'
                              ' correct/total={}/{},'
                              ' test distribution equal: {:.2f}, lhs>rhs: {:.2f}, lhs<rhs: {:.2f}'
