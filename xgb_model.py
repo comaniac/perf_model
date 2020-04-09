@@ -1,10 +1,17 @@
 """Train a XGBoost model."""
+import argparse
 import pickle
-from math import sqrt
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
+import tqdm
 import xgboost as xgb
-from sklearn.metrics import mean_squared_error as mse
+
+import logger
+
+INVALID_THD = 10
+
+log = logger.get_logger('XGB')
 
 
 def create_config():
@@ -16,61 +23,142 @@ def create_config():
 
     train = subparser.add_parser('train', help='Train cost model')
     train.add_argument('path', help='Feature file path or folder')
-    train.add_argument('--model',
-                       default='classify',
-                       choices=['regression', 'classify'],
-                       help='The target model to be trained')
+    train.add_argument('--n_class',
+                       type=int,
+                       default=100,
+                       help='The class number')
 
     return parser.parse_args()
 
 
-def compute_classify_accuracy(pred: np.ndarray,
-                              real: np.ndarray,
-                              allow_error: int = 0) -> float:
-    """Compute the model accuracy by comparing prediction and real results.
-
-    Parameters
-    ----------
-    pred: np.ndarray
-        The model pedicted results.
-
-    real: np.ndarray
-        Real results.
-
-    allow_error: int
-        Allowed error range (-n ~ n).
-
-    Returns
-    -------
-    accuracy: float
-        The accuracy in percentage.
-    """
-    if isinstance(pred[0], np.ndarray):
-        pred = np.array([p.argmax() for p in pred])
-    return 100.0 * sum([abs(p - r) <= allow_error
-                        for p, r in zip(pred, real)]) / len(real)
+def find_class(thrpt, boundaries):
+    """Determine which class of the given throughput should go."""
+    for idx, boundary in enumerate(boundaries):
+        if thrpt <= boundary:
+            return idx
+    return -1
 
 
-def compute_regression_error(pred: np.ndarray, real: np.ndarray) -> float:
-    """Compute the model error rate by comparing prediction and real results.
+def load_data(num_cls, file_path):
+    """Load tabular feature data."""
 
-    Parameters
-    ----------
-    pred: np.ndarray
-        The model pedicted results.
+    np.random.seed(23)
 
-    real: np.ndarray
-        Real results.
+    log.info('Parsing file...')
+    data = []
+    with open(file_path, 'r') as filep:
+        headers = next(filep).replace('\n', '').split(',')[:-1]
 
-    Returns
-    -------
-    error: float
-        The error rate in percentage.
-    """
-    return sqrt(mse(pred, real))
+        # Parse features to sequence. num_seq = num_feature + 1
+        for line in tqdm.tqdm(filep):
+            tokens = line.replace('\n', '').split(',')
+
+            # Filter out invalid records
+            if float(tokens[-1]) <= INVALID_THD:
+                continue
+
+            data.append([float(v) for v in tokens])
+
+    data = np.array(data)
+    np.random.shuffle(data)
+    features = np.array(data.T[:-1].T)
+    thrpts = np.array(data.T[-1].T)
+
+    log.info('Total data size %d', len(features))
+
+    # 80% for training.
+    # 20% for testing.
+    splitter = int(len(features) * 0.8)
+    train_feats = np.array(features[:splitter])
+    train_thrpts = np.array(thrpts[:splitter])
+
+    log.info('Train thrpt min max: %.2f %.2f', min(train_thrpts), max(train_thrpts))
+
+    # Identify throughput class boundaries.
+    sorted_thrpts = sorted(train_thrpts)
+    cls_size = len(sorted_thrpts) // num_cls
+    boundaries = [sorted_thrpts[-1]]
+    for ridx in range(num_cls - 1, 0, -1):
+        boundaries.append(sorted_thrpts[ridx * cls_size])
+    boundaries.reverse()
+
+    # Transform throughputs to classes.
+    log.info('Transforming throughput to class...')
+    cls_thrpts = []
+    with ProcessPoolExecutor(max_workers=8) as pool:
+        for start in tqdm.tqdm(
+                range(0, len(thrpts), 8),
+                bar_format='{desc}{percentage:3.0f}%|{bar:50}{r_bar}'):
+            futures = [
+                pool.submit(find_class, thrpt=thrpt, boundaries=boundaries)
+                for thrpt in thrpts[start:min(start + 8, len(thrpts))]
+            ]
+            for future in as_completed(futures):
+                cls_thrpts.append(future.result())
+    train_thrpts = np.array(cls_thrpts[:splitter], dtype='int32')
+
+    # Statistics
+    buckets = [0 for _ in range(num_cls)]
+    for thrpt_cls in train_thrpts:
+        buckets[thrpt_cls] += 1
+    log.debug('Training throughput distributions')
+    for idx, (boundary, bucket) in enumerate(zip(boundaries, buckets)):
+        log.debug('\t%02d (<=%.2f): %d', idx, boundary, bucket)
 
 
-def train_model(model: str, data_file: str):
+    test_feats = np.array(features[splitter:])
+    test_thrpts = np.array(cls_thrpts[splitter:], dtype='int32')
+    return headers, train_feats, train_thrpts, test_feats, test_thrpts
+
+
+def test_acc(pred_thrpts, test_thrpts):
+    """Test the model accuracy."""
+
+    log.debug('\nExpected\tThrpt-Pred\tThrpt-Error')
+
+    thrpt_pred_range = (float('inf'), 0)
+
+    # Confusion matrix for each class.
+    error = 0
+    TP = []
+    FN = []
+    FP = []
+
+    for pred, real in zip(pred_thrpts, test_thrpts):
+        pred = int(pred)
+        while len(TP) <= max(real, pred):
+            TP.append(0)
+            FN.append(0)
+            FP.append(0)
+
+        if pred == real:
+            TP[real] += 1
+        else:
+            error += 1
+            FN[real] += 1
+            FP[pred] += 1
+
+        thrpt_pred_range = (min(thrpt_pred_range[0], pred), max(thrpt_pred_range[1], pred))
+        log.debug('\t%d\t%d', real, pred)
+
+    accuracy = 100.0 * (1.0 - (error / len(test_thrpts)))
+    recalls = [
+        '{:.2f}%'.format(100.0 * tp / (tp + fn)) if tp + fn > 0 else 'N/A'
+        for tp, fn in zip(TP, FN)
+    ]
+    precisions = [
+        '{:.2f}%'.format(100.0 * tp / (tp + fp)) if tp + fp > 0 else 'N/A'
+        for tp, fp in zip(TP, FP)
+    ]
+
+    log.info('Thrpt predict range: %d, %d', thrpt_pred_range[0], thrpt_pred_range[1])
+    log.info('Recalls: %s', ', '.join(recalls[-3:-1]))
+    log.info('Precisions: %s', ', '.join(precisions[-3:-1]))
+    log.info('Accuracy: %.2f%%', accuracy)
+    return accuracy
+
+
+def train_model(n_class: int, data_file: str):
     """Train a cost model with provided data set.
 
     Parameters
@@ -82,85 +170,25 @@ def train_model(model: str, data_file: str):
         Data file in CSV format.
     """
 
-    np.random.seed(4)
+    headers, train_feats, train_thrpts, test_feats, test_thrpts = load_data(n_class, data_file)
 
-    # Exclude the header and make numpy array.
-    data = np.array([1])
-    with open(data_file, 'r') as filep:
-        headers = np.array(next(filep).replace('\n', '').split(',')[:-1])
-        data = np.array([
-            np.genfromtxt(np.array(l.replace('\n', '').split(',')))
-            for l in filep
-        ])
-    np.random.shuffle(data)
-
-    features = np.array(data.T[:-1].T)
-    results = np.array(data.T[-1].T)
-
-    classify_scale = int(max(results) + 1)
-
-    # Split training and testing set.
-    feat_split = int(len(features) * 0.8)
-    res_split = int(len(results) * 0.8)
-    train_feats = features[:feat_split]
-    train_res = results[:res_split]
-    test_feats = features[feat_split:]
-    test_res = results[res_split:]
-
-    print('%d for training and %d for testing' %
-          (feat_split, len(features) - feat_split))
-
-    trained_model = None
-    if model == 'classify':
-        trained_model = train_xgb_classify(headers, train_feats, train_res,
-                                           classify_scale)
-        pred = xgb_predict(trained_model, test_feats)
-        print('Allowed 0 Error Accuracy %.2f%%' %
-              compute_classify_accuracy(pred, test_res, allow_error=0))
-        print('Allowed 1 Error Accuracy %.2f%%' %
-              compute_classify_accuracy(pred, test_res, allow_error=1))
-    elif model == 'regression':
-        trained_model = train_xgb_regression(headers, train_feats, train_res)
-        pred = xgb_predict(trained_model, test_feats)
-        print('RMSE %.2f' % compute_regression_error(pred, test_res))
-    else:
-        raise RuntimeError('Unrecognized model: %s' % model)
-
-    if trained_model is not None:
-        pickle.dump(trained_model, open("model.dat", "wb"))
-
-
-def train_xgb_regression(headers, train_feats, train_res):
-    """Train an XGBoost model."""
-    dtrain = xgb.DMatrix(data=train_feats,
-                         label=train_res,
-                         feature_names=headers)
-    params = {
-        'max_depth': 10,
-        'gamma': 0.001,
-        'min_child_weight': 0,
-        'eta': 0.3,
-        'silent': 0,
-        'seed': 37,
-        'n_gpus': 0,
-        'objective': 'reg:squarederror'
-    }
-    model = xgb.train(params, dtrain)
-    return model
+    trained_model = train_xgb_classify(headers, train_feats, train_thrpts, n_class)
+    pred = xgb_predict(trained_model, test_feats)
+    test_acc(pred, test_thrpts)
+    pickle.dump(trained_model, open("model.dat", "wb"))
 
 
 def train_xgb_classify(headers: np.array, train_feats: np.ndarray,
-                       train_res: np.ndarray, classify_scale: int):
+                       train_res: np.ndarray, n_class: int):
     """Train an XGBoost model with multi-class objective."""
     params = {
-        'max_depth': 10,
+        'max_depth': 30,
         'gamma': 0.001,
         'min_child_weight': 0,
         'eta': 0.3,
-        'silent': 0,
         'seed': 37,
         'objective': 'multi:softmax',
-        'num_class': classify_scale,
+        'num_class': n_class,
         'n_gpus': 0,
         'tree_method': 'hist'
     }
@@ -180,7 +208,7 @@ def xgb_predict(model, test_feats: np.ndarray):
 if __name__ == "__main__":
     CONFIGS = create_config()
     if CONFIGS.mode == 'train':
-        print('Training %s using %s' % (CONFIGS.model, CONFIGS.path))
-        train_model(CONFIGS.model, CONFIGS.path)
+        print('Training %d classes using %s' % (CONFIGS.n_class, CONFIGS.path))
+        train_model(CONFIGS.n_class, CONFIGS.path)
     else:
         raise RuntimeError('Unknown mode %s' % CONFIGS.mode)

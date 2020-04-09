@@ -17,7 +17,7 @@ npx.set_np()
 
 log = logger.get_logger('BERT')
 
-INVALID_THD = 1 # Invalid throughput threshold (GFLOP/s).
+INVALID_THD = 10  # Invalid throughput threshold ratio.
 INVALID_LOG_THD = np.log(INVALID_THD)
 
 ### Class Declarations
@@ -43,12 +43,14 @@ class BERTEncoder(nn.Block):
 
 class ThrptPred(nn.Block):
     """The network to predict throughput."""
-    def __init__(self, hiddens, **kwargs):
+    def __init__(self, hiddens, dropout, **kwargs):
         super(ThrptPred, self).__init__(**kwargs)
         self.net = nn.Sequential()
         for hidden in hiddens:
             self.net.add(nn.Dense(hidden, activation='relu'))
-        self.net.add(nn.Dense(1, activation='relu')) # If predict log(thrpt) then no need.
+            self.net.add(nn.Dropout(dropout))
+        # Predict thrpt needs ReLU to guarantee positive, but predict log(thrpt) doesn't.
+        self.net.add(nn.Dense(1, activation='sigmoid'))
 
     def forward(self, X):  # pylint: disable=arguments-differ
         # 0 is the index of the CLS token
@@ -59,17 +61,16 @@ class ThrptPred(nn.Block):
 
 class ValidPred(nn.Block):
     """The network to predict if the config is valid or not."""
-    def __init__(self, hiddens, **kwargs):
+    def __init__(self, hiddens, dropout, **kwargs):
         super(ValidPred, self).__init__(**kwargs)
         self.net = nn.Sequential()
         for hidden in hiddens:
             self.net.add(nn.Dense(hidden, activation='relu'))
-        self.net.add(nn.Dense(1))
+            self.net.add(nn.Dropout(dropout))
+        self.net.add(nn.Dense(2))
 
     def forward(self, X):  # pylint: disable=arguments-differ
-        # 0 is the index of the CLS token
-        X = X[:, 0, :]
-        # X shape: (batch size, num_hiddens)
+        X = X[:, :, 0]
         return self.net(X)
 
 
@@ -79,20 +80,21 @@ class BERTModel(nn.Block):
                  center_layers, reg_encode_ffn_hiddens, reg_encode_layers,
                  reg_hiddens, cls_hiddens, dropout):
         super(BERTModel, self).__init__()
-        self.center = BERTEncoder(center_hiddens, center_ffn_hiddens, center_heads,
-                                  center_layers, dropout)
-        # self.reg_encoder = BERTEncoder(center_hiddens, reg_encode_ffn_hiddens,
-        #                                center_heads, reg_encode_layers,
-        #                                dropout)
-        self.reg_predictor = ThrptPred(reg_hiddens)
-        self.valid_predictor = ValidPred(cls_hiddens)
+        self.center = BERTEncoder(center_hiddens, center_ffn_hiddens,
+                                  center_heads, center_layers, dropout)
+        self.reg_encoder = BERTEncoder(center_hiddens, reg_encode_ffn_hiddens,
+                                       center_heads, reg_encode_layers,
+                                       dropout)
+        self.reg_predictor = ThrptPred(reg_hiddens, dropout)
+        self.valid_predictor = ValidPred(cls_hiddens, dropout)
 
     def forward(self, features):  # pylint: disable=arguments-differ
         encoded_X = self.center(features)
         valid_preds = self.valid_predictor(encoded_X)
-        #encoded_X = self.reg_encoder(encoded_X)
+        encoded_X = self.reg_encoder(encoded_X)
         thrpt_preds = self.reg_predictor(encoded_X)
         return (valid_preds, thrpt_preds)
+
 
 ## Functions
 
@@ -129,7 +131,9 @@ def load_data(file_path, batch_size, num_hiddens):
                 range(0, len(features), 8),
                 bar_format='{desc}{percentage:3.0f}%|{bar:50}{r_bar}'):
             futures = [
-                pool.submit(expand_hidden, feature=feature, num_hiddens=num_hiddens)
+                pool.submit(expand_hidden,
+                            feature=feature,
+                            num_hiddens=num_hiddens)
                 for feature in features[start:min(start + 8, len(features))]
             ]
             for future in as_completed(futures):
@@ -147,20 +151,37 @@ def load_data(file_path, batch_size, num_hiddens):
     train_thrpts = np.array(thrpts[:splitter1])
 
     # Make valid labels
-    labels = np.array([1 if thrpt > INVALID_THD else 0 for thrpt in train_thrpts])
+    labels = np.array([1 if thrpt >= INVALID_THD else 0 for thrpt in train_thrpts])
+
+    # Standardize training thrpts
+    thrpt_avg, thrpt_std = train_thrpts.mean().tolist(), train_thrpts.std().tolist()
+    # log.info('Train thrpt avd std: %.2f %.2f', thrpt_avg, thrpt_std)
+    # train_thrpts = (train_thrpts - thrpt_avg) / thrpt_std
+    # log.info('Standardized Thrpt range %.2f, %.2f', min(train_thrpts), max(train_thrpts))
 
     # Normalize training thrpts
-    thrpt_avg, thrpt_std = train_thrpts.mean().tolist(), train_thrpts.std().tolist()
-    log.info('Train thrpt avd std: %.2f %.2f', thrpt_avg, thrpt_std)
+    thrpt_avg = min(train_thrpts.nonzero()).tolist()[0]
+    thrpt_std = max(train_thrpts).tolist() - thrpt_avg
+    log.info('Train thrpt min range: %.2f %.2f', thrpt_avg, thrpt_std)
     train_thrpts = (train_thrpts - thrpt_avg) / thrpt_std
 
-    # Make log to training outputs.
-    #train_thrpts = np.log(train_thrpts + 1e-6)
+    # Statistics
+    buckets = [0 for _ in range(11)]
+    for thrpt in train_thrpts:
+        buckets[int(thrpt * 10)] += 1
+    log.info('Training thrpt distributions')
+    for idx, bucket in enumerate(buckets):
+        print('%d: %d' % (idx, bucket))
 
     # Calculate imbalance weight.
-    num_valid = len((train_thrpts >= INVALID_THD).nonzero()[0])
+    num_valid = sum(labels).tolist()
     num_invalid = len(train_thrpts) - num_valid
     pos_weight = num_invalid / num_valid
+    log.info('Valid %.2f : Invalid %.2f', num_valid / len(train_thrpts),
+             num_invalid / len(train_thrpts))
+
+    # Make log to training outputs.
+    # train_thrpts = np.log(train_thrpts + 1e-6)
 
     train_iter = gluon.data.DataLoader(
         gluon.data.ArrayDataset(train_feats, train_thrpts, labels),
@@ -175,9 +196,10 @@ def load_data(file_path, batch_size, num_hiddens):
             test_feats, test_thrpts, thrpt_avg, thrpt_std)
 
 
-def get_batch_loss(net, valid_loss, thrpt_loss, segments_X_shards, nsp_y_shards, labels):
+def get_batch_loss(net, valid_loss, thrpt_loss, segments_X_shards,
+                   nsp_y_shards, labels):
     """Get loss of a batch."""
-    alpha = 1.0 # FIXME: A more reasonable number.
+    alpha = 1.0  # FIXME: A more reasonable number.
 
     valid_preds, thrpt_preds = net(segments_X_shards)
 
@@ -186,20 +208,7 @@ def get_batch_loss(net, valid_loss, thrpt_loss, segments_X_shards, nsp_y_shards,
 
     vls = valid_loss(valid_preds, labels)
     tls = thrpt_loss(thrpt_preds, nsp_y_shards)
-    return vls + labels * alpha * tls
-
-    # ls = []
-    # for segments_X_shard, nsp_y_shard in zip(segments_X_shards, nsp_y_shards):
-    #     valid_pred, thrpt_pred = net(np.expand_dims(segments_X_shard, axis=0))
-    #     label = np.array([1 if nsp_y_shard > 0 else 0], ctx=valid_pred.ctx)
-    #     vl = valid_loss(valid_pred, label).mean()
-    #     tl = thrpt_loss(np.log(thrpt_pred + 1e-6), np.log(nsp_y_shard + 1e-6)).mean()
-    #     if nsp_y_shard == 0:
-    #         ls.append(vl)
-    #     else:
-    #         ls.append(vl + alpha * tl)
-    # return ls
-
+    return (vls + labels * alpha * tls).mean()
 
 
 def test_acc(net,
@@ -211,28 +220,47 @@ def test_acc(net,
     """Test the model accuracy."""
     valid_error = 0
     thrpt_errors = []
+
+    if print_log:
+        log.info('\nExpected\tValid-Pred0\tValid-Pred1\tThrpt-Pred\tThrpt-Error')
+
+    thrpt_pred_range = (float('inf'), 0)
+
     for start in range(0, len(test_feats), 512):
-        valid_preds, thrpt_preds = net(test_feats[start:min(start + 512, len(test_feats))])
+        valid_preds, thrpt_preds = net(
+            test_feats[start:min(start + 512, len(test_feats))])
 
         # Recover prediction results.
         thrpt_preds = (thrpt_preds * train_thrpt_std) + train_thrpt_avg
+        #thrpt_preds = np.exp(thrpt_preds)
 
         for idx, (valid_pred, thrpt_pred) in enumerate(zip(valid_preds, thrpt_preds)):
-            valid_pred = valid_pred.tolist()[0]
-            thrpt_pred = thrpt_pred.tolist()[0]
             real = test_thrpts[start + idx].tolist()
-            valid_error += (valid_pred > 0.5 and real == 0) or (valid_pred <= 0.5 and real > 0)
-            if real > INVALID_THD:
-                error = abs(thrpt_pred - real) / real
+            valid_real = 1 if real > INVALID_THD else 0
+            valid_prob = valid_pred.tolist()
+            valid_pred = 1 if valid_prob[0] <= valid_prob[1] else 0
+            valid_error += 1 if valid_real != valid_pred else 0
+
+            thrpt_pred = thrpt_pred.tolist()[0]
+            if valid_real == 1:
+                if valid_pred == 0:  # Predict invalid will output 0 GFLOPs.
+                    error = 1
+                else:
+                    error = abs(thrpt_pred - real) / real
+                    thrpt_pred_range = (min(thrpt_pred_range[0], thrpt_pred),
+                                        max(thrpt_pred_range[1], thrpt_pred))
+
                 thrpt_errors.append(error)
                 if print_log:
-                    log.info('Expected %.6f, Valid Pred %.2f, Thrpt Pred %.6f, Error %.2f%%',
-                             real, valid_pred, thrpt_pred, 100 * error)
+                    log.info('\t%.6f\t%.2f\t%.2f\t%.6f\t%.2f%%',
+                             real, valid_prob[0], valid_prob[1], thrpt_pred, 100 * error)
             elif print_log:
-                log.info('Expected invalid, Valid Pred %.2f, Thrpt Pred %.6f',
-                         valid_pred, thrpt_pred)
+                log.info('\t0\t%.2f\t%.2f\t%.6f', valid_prob[0], valid_prob[1], thrpt_pred)
+
     valid_err_rate = 100.0 * valid_error / len(test_feats)
-    thrpt_err = (np.array(thrpt_errors).mean().tolist(), np.array(thrpt_errors).std().tolist())
+    thrpt_err = (np.array(thrpt_errors).mean().tolist(),
+                 np.array(thrpt_errors).std().tolist())
+    log.info('Thrpt predict range: %.6f, %.6f', thrpt_pred_range[0], thrpt_pred_range[1])
     if print_log:
         log.info('Valid error %.2f%%', valid_err_rate)
         log.info('Average error: %.2f (std %.2f)', thrpt_err[0], thrpt_err[1])
@@ -255,8 +283,7 @@ def train_bert(args, reporter=None):
     validate_thrpts = np.array(validate_thrpts, ctx=ctx[0])
     test_feats = np.array(test_feats, ctx=ctx[0])
     test_thrpts = np.array(test_thrpts, ctx=ctx[0])
-    log.info('Positive weight for CELoss: %.2f', pos_weight)
-
+    #log.info('Positive weight for CELoss: %.2f', pos_weight)
 
     fnet = [
         'Center Heads: {}'.format(args.center_heads),
@@ -270,17 +297,15 @@ def train_bert(args, reporter=None):
     log.info('Network\n\t%s', '\n\t'.join(fnet))
     fparams = [
         'Batch Size: {}'.format(args.batch_size),
-        'Dropout: {}'.format(args.dropout),
-        'Epochs: {}'.format(args.epochs),
-        'Learning Rate: {}'.format(args.lr),
-        'Weight Decay: {}'.format(args.wd)
+        'Dropout: {}'.format(args.dropout), 'Epochs: {}'.format(args.epochs),
+        'Learning Rate: {}'.format(args.lr), 'Weight Decay: {}'.format(args.wd)
     ]
     log.info('Hyper-Parameters:\n\t%s', '\n\t'.join(fparams))
 
     net = BERTModel(args.center_hiddens, args.center_ffn_hiddens,
-                    args.center_heads, args.center_layers, args.reg_encode_ffn_hiddens,
-                    args.reg_encode_layers, args.reg_hiddens, args.cls_hiddens,
-                    args.dropout)
+                    args.center_heads, args.center_layers,
+                    args.reg_encode_ffn_hiddens, args.reg_encode_layers,
+                    args.reg_hiddens, args.cls_hiddens, args.dropout)
     net.initialize(init.Xavier(), ctx=ctx)
     log.info('Model initialized on %s', str(ctx))
 
@@ -291,7 +316,7 @@ def train_bert(args, reporter=None):
     })
 
     # Initialize loss functions.
-    valid_loss = gluon.loss.SigmoidBCELoss(weight=pos_weight)
+    valid_loss = gluon.loss.SoftmaxCELoss()  #weight=pos_weight,
     thrpt_loss = gluon.loss.L2Loss()
 
     log.info('Training...')
@@ -304,29 +329,35 @@ def train_bert(args, reporter=None):
         if reporter is None:
             log.info('Epoch %d', epoch)
             progress = tqdm.tqdm(
-                train_iter, bar_format='{desc} {percentage:3.0f}%|{bar:50}{r_bar}')
+                train_iter,
+                bar_format='{desc} {percentage:3.0f}%|{bar:50}{r_bar}')
         else:
             progress = train_iter
-        for iter_idx, (batch_feat, batch_thrpt, batch_label) in enumerate(progress):
+        for iter_idx, (batch_feat, batch_thrpt,
+                       batch_label) in enumerate(progress):
             np_feat = split_and_load(batch_feat, ctx, even_split=False)[0]
             np_thrpt = split_and_load(batch_thrpt, ctx, even_split=False)[0]
             np_label = split_and_load(batch_label, ctx, even_split=False)[0]
             with autograd.record():
                 ls = get_batch_loss(net, valid_loss, thrpt_loss, np_feat, np_thrpt, np_label)
             ls.backward()
-            trainer.step(args.batch_size)
-            l_mean = sum([float(l) for l in ls]) / len(ls)
+            trainer.step(1)
+            l_mean = float(ls)
             metric.add(l_mean, 1)
             if reporter is None and iter_idx % 30 == 0:
-                progress.set_description_str(desc='Loss {:.3f}'.format(l_mean), refresh=True)
+                progress.set_description_str(desc='Loss {:.3f}'.format(l_mean),
+                                             refresh=True)
         val_acc = test_acc(net,
                            validate_feats,
                            validate_thrpts,
                            train_thrpt_avg,
-                           train_thrpt_std, print_log=False)
+                           train_thrpt_std,
+                           print_log=False)
         if reporter is None:
-            log.info('Epoch %d: Loss %.3f, Valid Error %.2f%%, Thrpt Error %.3f (std %.3f)',
-                     epoch, metric[0] / metric[1], val_acc[0], val_acc[1][0], val_acc[1][1])
+            log.info(
+                'Epoch %d: Loss %.3f, Valid Error %.2f%%, Thrpt Error %.3f (std %.3f)',
+                epoch, metric[0] / metric[1], val_acc[0], val_acc[1][0],
+                val_acc[1][1])
         else:
             # FIXME: Not working now
             reporter(epoch=epoch, accuracy=val_acc)
@@ -344,18 +375,18 @@ if __name__ == "__main__":
 
     main_args.center_heads = 8
     main_args.center_hiddens = main_args.center_heads  # Force 1-to-1 attention
-    main_args.center_layers = 4
+    main_args.center_layers = 2
     main_args.center_ffn_hiddens = 1024
-    main_args.reg_encode_layers = 2
-    main_args.reg_encode_ffn_hiddens = 512
-    main_args.reg_hiddens = [2048]
-    main_args.cls_hiddens = [1024, 1024]
+    main_args.reg_encode_layers = 6
+    main_args.reg_encode_ffn_hiddens = 256
+    main_args.reg_hiddens = [128, 128]
+    main_args.cls_hiddens = [128, 128]
 
     main_args.data_file = sys.argv[1]
-    main_args.batch_size = 512
-    main_args.dropout = 0.3
-    main_args.epochs = 10
-    main_args.lr = 1e-4
-    main_args.wd = 1
+    main_args.batch_size = 128
+    main_args.dropout = 0.1
+    main_args.epochs = 40
+    main_args.lr = 1e-3
+    main_args.wd = 1e-4
     file_name = sys.argv[2]
     train_bert(main_args).save_parameters(file_name)

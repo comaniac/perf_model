@@ -1,15 +1,17 @@
+# pylint: disable=missing-docstring, invalid-name
 import argparse
-import pandas as pd
-import numpy as np
-import random
 import logging
 import os
+
+import matplotlib.pyplot as plt
 import mxnet as mx
+import numpy as np
+import pandas as pd
 from mxnet import gluon
 from mxnet.gluon import nn
+
+from numpy_nlp.utils.misc import logging_config, parse_ctx, set_seed
 from numpy_nlp.utils.parameter import grad_global_norm
-from numpy_nlp.utils.misc import logging_config, set_seed, parse_ctx
-import matplotlib.pyplot as plt
 
 mx.npx.set_np()
 INVALID_THD = 10  # Invalid throughput threshold ratio.
@@ -67,9 +69,9 @@ def parse_args():
     parser.add_argument('--rank_alpha', type=float, default=1.0,
                         help='Control the weight of the ranking loss')
     parser.add_argument('--threshold', type=float, default=5)
-    parser.add_argument('--num_hidden', type=int, default=256)
-    parser.add_argument('--num_layers', type=int, default=2)
-    parser.add_argument('--dropout', type=float, default=0.1)
+    parser.add_argument('--num_hidden', type=int, default=128)
+    parser.add_argument('--num_layers', type=int, default=3)
+    parser.add_argument('--dropout', type=float, default=0.05)
     parser.add_argument('--gpus', type=str, default='0',
                         help='list of gpus to run, e.g. 0 or 0,2,5. -1 means using cpu.')
     args = parser.parse_args()
@@ -102,7 +104,7 @@ def get_data(args):
 
 
 def get_feature_label(df):
-    feature_keys = [ele for ele in train_df.keys() if ele != 'thrpt']
+    feature_keys = [ele for ele in df.keys() if ele != 'thrpt']
     features = df[feature_keys].to_numpy()
     labels = df['thrpt'].to_numpy()
     return features, labels
@@ -391,8 +393,7 @@ def train_nn(args, train_df, test_df):
     best_val_loss_f.close()
     test_loss_f.close()
 
-
-if __name__ == "__main__":
+def main():
     args = parse_args()
     set_seed(args.seed)
     logging_config(args.out_dir, 'thrpt_model')
@@ -405,3 +406,6 @@ if __name__ == "__main__":
         train_nn(args, train_df, test_df)
     else:
         raise NotImplementedError
+
+if __name__ == "__main__":
+    main()

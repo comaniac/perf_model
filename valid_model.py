@@ -104,9 +104,9 @@ def test_acc(net, test_feats, test_valids, print_log=True):
             pred_min = min(min(pred_prob), pred_min)
             pred_max = max(max(pred_prob), pred_max)
             if hat == 0:
-                valid_error += 1 if pred_prob[1] <= pred_prob[0] else 0
+                valid_error += 1 if pred_prob[0] <= pred_prob[1] else 0
             else:
-                valid_error += 1 if pred_prob[1] > pred_prob[0] else 0
+                valid_error += 1 if pred_prob[0] > pred_prob[1] else 0
             if print_log:
                 log.info('Expected %s, predict (%.2f, %.2f)', hat, pred_prob[0], pred_prob[1])
 
@@ -134,7 +134,7 @@ def train_model(args, reporter=None):
 
     # Initialize loss function.
     log.info('Positive weight for CELoss: %.2f', pos_weight)
-    valid_loss = gluon.loss.SoftmaxCrossEntropyLoss(weight=pos_weight, sparse_label=True)
+    valid_loss = gluon.loss.SoftmaxCrossEntropyLoss() #(weight=pos_weight, sparse_label=True)
 
 
     fnet = [
@@ -202,13 +202,13 @@ def train_model(args, reporter=None):
 if __name__ == "__main__":
     main_args = argparse.Namespace()
 
-    main_args.cls_hiddens = [256, 64]
+    main_args.cls_hiddens = [128, 128]
 
     main_args.data_file = sys.argv[1]
     main_args.batch_size = 128
-    main_args.dropout = 0.3
-    main_args.epochs = 5
-    main_args.lr = 5e-5
-    main_args.wd = 1
+    main_args.dropout = 0.1
+    main_args.epochs = 20
+    main_args.lr = 1e-2
+    main_args.wd = 0.0001
     file_name = sys.argv[2]
     train_model(main_args).save_parameters(file_name)

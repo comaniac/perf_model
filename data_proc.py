@@ -119,16 +119,16 @@ def extract_feature(inp, log_scale=False):
             attr_idx += 1
 
     # Feature configs
-    for k, v in inp.config._entity_map.items():
-        if isinstance(v, SplitEntity):
-            for idx, elt in enumerate(v.size):
-                features['sp_{0}_{1}'.format(k, idx)] = elt
-        elif isinstance(v, AnnotateEntity):
-            features['an_{0}'.format(k)] = v.anns
-        elif isinstance(v, OtherOptionEntity):
-            features['ot_{0}'.format(k)] = v.val
+    for key, val in inp.config._entity_map.items(): # pylint: disable=protected-access
+        if isinstance(val, SplitEntity):
+            for idx, elt in enumerate(val.size):
+                features['sp_{0}_{1}'.format(key, idx)] = elt
+        elif isinstance(val, AnnotateEntity):
+            features['an_{0}'.format(key)] = val.anns
+        elif isinstance(val, OtherOptionEntity):
+            features['ot_{0}'.format(key)] = val.val
         else:
-            raise RuntimeError("Unsupported config entity: " + v)
+            raise RuntimeError("Unsupported config entity: " + val)
 
     if log_scale:
         for key in features:
@@ -358,7 +358,8 @@ def json2csv(json_path: str, std: bool, out_path: str):
 
                 # Let each feature be a row.
                 tran_data = np.array(dataframe).T
-                for row in tran_data[:-1]:  # pylint: disable=unsubscriptable-object
+                # pylint: disable=unsubscriptable-object
+                for feat, row in zip(feature_list[:-1], tran_data[:-1]):
                     try:  # Standardize floating values.
                         float_row = row.astype('float')
                         meta = [float_row.mean(), float_row.std()]
@@ -369,6 +370,7 @@ def json2csv(json_path: str, std: bool, out_path: str):
                         cate_map = {c: i for i, c in enumerate(meta)}
                         std_data.append([cate_map[c] for c in row])
 
+                    filep.write('{},'.format(feat))
                     filep.write(','.join([str(e) for e in meta]))
                     filep.write('\n')
 
