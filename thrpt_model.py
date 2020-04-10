@@ -1,4 +1,5 @@
-# pylint: disable=missing-docstring, invalid-name
+# pylint: disable=missing-docstring, invalid-name, ungrouped-imports
+# pylint: disable=unsupported-assignment-operation, no-member
 import argparse
 import logging
 import os
@@ -15,7 +16,6 @@ from numpy_nlp.utils.parameter import grad_global_norm
 
 mx.npx.set_np()
 INVALID_THD = 10  # Invalid throughput threshold ratio.
-INVALID_LOG_THD = np.log(INVALID_THD)
 
 
 def plot_save_figure(gt_thrpt, pred_thrpt, save_dir=None):
@@ -94,7 +94,7 @@ def get_data(args):
             continue
         else:
             used_keys.append(key)
-    logging.info('Original keys={}, Not used keys={}'.format(list(df.keys()), not_used_keys))
+    logging.info('Original keys=%s, Not used keys=%s', list(df.keys()), not_used_keys)
     df = df[used_keys]
     # Split Train/Test
     num_train = int(len(df) * (1 - args.test_ratio))
@@ -110,13 +110,13 @@ def get_feature_label(df):
     return features, labels
 
 
-def train_regression_autogluon(train_df, test_df):
+def train_regression_autogluon(args, train_df, test_df):
     mx.npx.reset_np()
     from autogluon import TabularPrediction as task
     predictor = task.fit(train_data=task.Dataset(df=train_df),
                          output_directory=args.out_dir, label='thrpt',
                          eval_metric='mean_absolute_error')
-    performance = predictor.evaluate(test_df)
+    #performance = predictor.evaluate(test_df)
     test_prediction = predictor.predict(test_df)
     ret = np.zeros((len(test_prediction), 2), dtype=np.float32)
     for i, (lhs, rhs) in enumerate(zip(test_df['thrpt'].to_numpy(), test_prediction)):
@@ -130,7 +130,7 @@ def train_regression_autogluon(train_df, test_df):
     mx.npx.set_np()
 
 
-def train_ranking_catboost(train_df, test_df):
+def train_ranking_catboost(_, train_df, test_df):
     import catboost
     params = {'loss_function': 'YetiRank'}
     train_features, train_labels = get_feature_label(train_df)
@@ -143,19 +143,19 @@ def train_ranking_catboost(train_df, test_df):
     logging.info(predict_result)
 
 
-class PerfNet(gluon.HybridBlock):
+class EmbedNet(gluon.HybridBlock):
     def __init__(self, num_hidden=64, num_layer=2, dropout=0.1, prefix=None, params=None):
         super().__init__(prefix=prefix, params=params)
         with self.name_scope():
             self.layers = nn.HybridSequential()
             with self.layers.name_scope():
-                for i in range(num_layer):
+                for _ in range(num_layer):
                     self.layers.add(nn.Dense(num_hidden, flatten=False))
                     self.layers.add(nn.LeakyReLU(0.1))
                     self.layers.add(nn.Dropout(dropout))
 
-    def hybrid_forward(self, F, data):
-        return self.layers(data)
+    def hybrid_forward(self, F, x, *args, **kwargs):
+        return self.layers(x)
 
 
 def get_nn_pred_scores(embed_net, regression_thrpt_net, test_features,
@@ -184,7 +184,8 @@ def evaluate_nn(test_features, test_labels, embed_net, regression_thrpt_net,
         batch_embeddings = embeddings[i:(i + batch_size)]
         batch_labels = test_labels[i:(i + batch_size)]
         batch_pred_thrpt = regression_thrpt_net(batch_embeddings)[:, 0]
-        total_mae += mx.np.abs(batch_pred_thrpt - mx.np.array(batch_labels, dtype=np.float32, ctx=ctx)).sum()
+        total_mae += mx.np.abs(batch_pred_thrpt -
+                               mx.np.array(batch_labels, dtype=np.float32, ctx=ctx)).sum()
         total_mae_cnt += batch_labels.shape[0]
     # Calculate ranking scores
     n_correct = 0
@@ -218,13 +219,14 @@ def evaluate_nn(test_features, test_labels, embed_net, regression_thrpt_net,
             total_nll += -logits.sum()
             for k in range(3):
                 gt_label_distribution[k] += (pair_label == k).sum()
-    return total_nll / n_total, total_mae / total_mae_cnt, n_correct / n_total, n_correct, n_total, gt_label_distribution
+    return (total_nll / n_total, total_mae / total_mae_cnt, n_correct / n_total, n_correct,
+            n_total, gt_label_distribution)
 
 
 def train_nn(args, train_df, test_df):
     ctx = parse_ctx(args.gpus)[0]
     batch_size = args.batch_size
-    embed_net = PerfNet(args.num_hidden, args.num_layers, args.dropout, prefix='embed_net_')
+    embed_net = EmbedNet(args.num_hidden, args.num_layers, args.dropout, prefix='embed_net_')
     rank_score_net = nn.HybridSequential(prefix='rank_score_net_')
     with rank_score_net.name_scope():
         rank_score_net.add(nn.Dense(args.num_hidden, flatten=False))
@@ -326,14 +328,12 @@ def train_nn(args, train_df, test_df):
         avg_rank_loss += rank_loss.asnumpy() * batch_size * batch_size
         avg_rank_loss_denom += batch_size * batch_size
         if (i + 1) % args.log_interval == 0:
-            logging.info('Iter:{}/{}, Train Loss Regression/Ranking={}/{}, '
-                  'grad_norm Embed/Regression/Rank={}/{}/{}'
-                  .format(i + 1, args.niter,
-                          avg_regress_loss / avg_regress_loss_denom,
-                          avg_rank_loss / avg_rank_loss_denom,
-                          avg_embed_net_norm / avg_norm_iter,
-                          avg_regression_thrpt_net_norm / avg_norm_iter,
-                          avg_rank_score_net_norm / avg_norm_iter))
+            logging.info(
+                'Iter:%d/%d, Train Loss Regression/Ranking=%f/%f, '
+                'grad_norm Embed/Regression/Rank=%f/%f/%f', i + 1, args.niter,
+                avg_regress_loss / avg_regress_loss_denom, avg_rank_loss / avg_rank_loss_denom,
+                avg_embed_net_norm / avg_norm_iter, avg_regression_thrpt_net_norm / avg_norm_iter,
+                avg_rank_score_net_norm / avg_norm_iter)
             avg_regress_loss = 0
             avg_regress_loss_denom = 0
             avg_rank_loss = 0
@@ -347,38 +347,36 @@ def train_nn(args, train_df, test_df):
                 evaluate_nn(dev_features, dev_labels, embed_net, regression_thrpt_net,
                             rank_score_net, batch_size, args.num_hidden, ctx, args.threshold)
             pair_label_total = gt_label_distribution.sum()
-            logging.info('Validation error: nll={}, mae={}, acc={},'
-                         ' correct/total={}/{},'
-                         ' dev distribution equal: {:.2f}, lhs>rhs: {:.2f}, lhs<rhs: {:.2f}'
-                         .format(val_nll, val_mae, val_acc, n_correct, n_total,
-                                 gt_label_distribution[0] / pair_label_total * 100,
-                                 gt_label_distribution[1] / pair_label_total * 100,
-                                 gt_label_distribution[2] / pair_label_total * 100))
+            logging.info(
+                'Validation error: nll=%f, mae=%f, acc=%f,'
+                ' correct/total=%d/%d,'
+                ' dev distribution equal: %.2f, lhs>rhs: %.2f, lhs<rhs: %.2f', val_nll, val_mae,
+                val_acc, n_correct, n_total, gt_label_distribution[0] / pair_label_total * 100,
+                gt_label_distribution[1] / pair_label_total * 100,
+                gt_label_distribution[2] / pair_label_total * 100)
             val_loss = args.regress_alpha * val_nll + args.rank_alpha * val_mae
             if val_loss < best_val_loss:
                 no_better_val_cnt = 0
                 best_val_loss = val_loss
-                embed_net.save_parameters(os.path.join(
-                    args.out_dir, 'embed_net_best.params'))
-                rank_score_net.save_parameters(os.path.join(
-                    args.out_dir, 'rank_score_net_best.params'))
+                embed_net.export(os.path.join(args.out_dir, 'embed_net'))
+                rank_score_net.export(os.path.join(args.out_dir, 'rank_score_net'))
                 best_val_loss_f.write('{}, {}, {}, {}\n'.format(i + 1, val_acc, val_mae, val_nll))
                 best_val_loss_f.flush()
-                test_nll, test_mae, test_acc, test_n_correct, test_n_total, test_gt_label_distribution = \
-                    evaluate_nn(test_features, test_labels, embed_net, regression_thrpt_net,
-                                rank_score_net, batch_size, args.num_hidden, ctx, args.threshold)
+                (test_nll, test_mae, test_acc, test_n_correct, test_n_total,
+                 test_gt_label_distribution) = evaluate_nn(test_features, test_labels, embed_net,
+                                                           regression_thrpt_net, rank_score_net,
+                                                           batch_size, args.num_hidden, ctx,
+                                                           args.threshold)
                 test_loss_f.write('{}, {}, {}, {}\n'.format(i + 1, test_acc, test_mae, test_nll))
                 test_loss_f.flush()
-                logging.info('Test error: nll={}, mae={}, acc={},'
-                             ' correct/total={}/{},'
-                             ' test distribution equal: {:.2f}, lhs>rhs: {:.2f}, lhs<rhs: {:.2f}'
-                             .format(test_nll, test_mae, test_acc, test_n_correct, test_n_total,
-                                     test_gt_label_distribution[0] /
-                                     test_gt_label_distribution.sum() * 100,
-                                     test_gt_label_distribution[1] /
-                                     test_gt_label_distribution.sum() * 100,
-                                     test_gt_label_distribution[2] /
-                                     test_gt_label_distribution.sum() * 100))
+                logging.info(
+                    'Test error: nll=%f, mae=%f, acc=%f,'
+                    ' correct/total=%d/%d,'
+                    ' test distribution equal: %.2f, lhs>rhs: %.2f, lhs<rhs: %.2f', test_nll,
+                    test_mae, test_acc, test_n_correct, test_n_total,
+                    test_gt_label_distribution[0] / test_gt_label_distribution.sum() * 100,
+                    test_gt_label_distribution[1] / test_gt_label_distribution.sum() * 100,
+                    test_gt_label_distribution[2] / test_gt_label_distribution.sum() * 100)
             else:
                 no_better_val_cnt += 1
                 if no_better_val_cnt > 5:
@@ -388,7 +386,7 @@ def train_nn(args, train_df, test_df):
                     embed_trainer.set_learning_rate(curr_lr)
                     regression_score_trainer.set_learning_rate(curr_lr)
                     rank_score_trainer.set_learning_rate(curr_lr)
-                    logging.info('Decrease learning rate to {}'.format(curr_lr))
+                    logging.info('Decrease learning rate to %f', curr_lr)
                     no_better_val_cnt = 0
     best_val_loss_f.close()
     test_loss_f.close()
@@ -399,9 +397,9 @@ def main():
     logging_config(args.out_dir, 'thrpt_model')
     train_df, test_df = get_data(args)
     if args.algo == 'auto':
-        train_regression_autogluon(train_df, test_df)
+        train_regression_autogluon(args, train_df, test_df)
     elif args.algo == 'cat':
-        train_ranking_catboost(train_df, test_df)
+        train_ranking_catboost(args, train_df, test_df)
     elif args.algo == 'nn':
         train_nn(args, train_df, test_df)
     else:
