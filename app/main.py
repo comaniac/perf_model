@@ -2,76 +2,22 @@
 # pylint: disable=ungrouped-imports
 
 import sys
-import time
 import warnings
 
 import mxnet as mx
 import numpy as np
-from mxnet import gluon
+from mxnet import gluon, npx
 
 import tvm
 import tvm.contrib.graph_runtime as runtime
-from data_proc import extract_feature
+from measure import DummyBuilder, RankModelRunner
 from tvm import autotvm, relay
-from tvm.autotvm.measure import LocalRunner, MeasureErrorNo, MeasureResult
-from tvm.autotvm.measure.measure import Builder
-from tvm.autotvm.measure.measure_methods import BuildResult
+from tvm.autotvm.measure.measure_methods import LocalBuilder
 from tvm.autotvm.tuner import GATuner, GridSearchTuner, RandomTuner, XGBTuner
+from tvm.relay import testing
 
-class DummyBuilder(Builder):
-    """A dummy builder for cost model."""
-    def build(self, measure_inputs):
-        """Build nothing."""
-        return [BuildResult(None, None, None, 0) for _ in range(len(measure_inputs))]
+npx.set_np()
 
-
-class RankModelRunner(LocalRunner):
-    """Rank Model Runner Class."""
-    def __init__(self,
-                 valid_model_forward,
-                 rank_model_forward,
-                 timeout=5,
-                 n_parallel=None,
-                 number=4,
-                 repeat=3,
-                 min_repeat_ms=0,
-                 cooldown_interval=0.1,
-                 check_correctness=False):
-        super(RankModelRunner, self).__init__(timeout, n_parallel, number, repeat, min_repeat_ms,
-                                              cooldown_interval, check_correctness)
-        self.valid_model_forward = valid_model_forward
-        self.rank_model_forward = rank_model_forward
-
-    def set_task(self, task):
-        self.task = task
-
-    def run(self, measure_inputs, _):
-        """The cost in MeasureResult is the ranking. 1 is the best."""
-        features = extract_feature(measure_inputs)
-        valids = self.valid_model_forward(features)
-
-        # Pairwise ranking.
-        scores = np.zeros(len(features))
-        for idx1, feat1 in enumerate(features):
-            if not valids[idx1]:
-                continue
-            for idx2, feat2 in enumerate(features[idx1 + 1:]):
-                if not valids[idx2]:
-                    continue
-                rank = self.rank_model_forward([feat1, feat2])
-                if rank[0] == 0:
-                    scores[idx1] += 1
-                elif rank[1] == 0:
-                    scores[idx2] += 1
-        ranks = np.argsort(-scores) + 1
-
-        results = []
-        for idx, valid in enumerate(valids):
-            if not valid:
-                results.append(MeasureResult([1e+5], MeasureErrorNo.RUNTIME_DEVICE, 0, time.time()))
-            else:
-                results.append(MeasureResult([ranks[idx]], MeasureErrorNo.NO_ERROR, 0, time.time()))
-        return results
 
 def get_network(name, dtype, batch_size):
     """Get the symbol definition and random weight of a network"""
@@ -80,23 +26,23 @@ def get_network(name, dtype, batch_size):
 
     if "resnet" in name:
         n_layer = int(name.split('-')[1])
-        mod, params = relay.testing.resnet.get_workload(num_layers=n_layer,
-                                                        batch_size=batch_size,
-                                                        dtype=dtype)
+        mod, params = testing.resnet.get_workload(num_layers=n_layer,
+                                                  batch_size=batch_size,
+                                                  dtype=dtype)
     elif "vgg" in name:
         n_layer = int(name.split('-')[1])
-        mod, params = relay.testing.vgg.get_workload(num_layers=n_layer,
-                                                     batch_size=batch_size,
-                                                     dtype=dtype)
+        mod, params = testing.vgg.get_workload(num_layers=n_layer,
+                                               batch_size=batch_size,
+                                               dtype=dtype)
     elif name == 'mobilenet':
-        mod, params = relay.testing.mobilenet.get_workload(batch_size=batch_size, dtype=dtype)
+        mod, params = testing.mobilenet.get_workload(batch_size=batch_size, dtype=dtype)
     elif name == 'squeezenet_v1.1':
-        mod, params = relay.testing.squeezenet.get_workload(batch_size=batch_size,
-                                                            version='1.1',
-                                                            dtype=dtype)
+        mod, params = testing.squeezenet.get_workload(batch_size=batch_size,
+                                                      version='1.1',
+                                                      dtype=dtype)
     elif name == 'inception_v3':
         input_shape = (1, 3, 299, 299)
-        mod, params = relay.testing.inception_v3.get_workload(batch_size=batch_size, dtype=dtype)
+        mod, params = testing.inception_v3.get_workload(batch_size=batch_size, dtype=dtype)
     elif name == 'mxnet':
         # an example for mxnet model
         from mxnet.gluon.model_zoo.vision import get_model
@@ -135,7 +81,7 @@ def tune_kernels(tasks,
             raise ValueError("Invalid tuner: " + tuner)
 
         # do tuning
-        n_trial = len(task.config_space)
+        n_trial = 128  #len(task.config_space)
         tuner_obj.tune(n_trial=n_trial,
                        early_stopping=early_stopping,
                        measure_option=measure_option,
@@ -158,6 +104,7 @@ def tune_and_evaluate(model_name, dtype, batch_size, target, tuning_opt):
 
     # run tuning tasks
     tune_kernels(tasks, **tuning_opt)
+    return
 
     with autotvm.apply_history_best(tuning_opt['log_filename']):
         print("Compile...")
@@ -182,9 +129,24 @@ def tune_and_evaluate(model_name, dtype, batch_size, target, tuning_opt):
 def main():
     """Main entry."""
 
-    valid_net_file = sys.argv[1]
-    embed_net_file = sys.argv[2]
-    rank_net_file = sys.argv[3]
+    # Load feature metadata.
+    feature_metadata = []
+    with open(sys.argv[1], 'r') as filep:
+        for line in filep:
+            tokens = line.replace('\n', '').split(',')
+            try:
+                # Numerical features: (name, used, (mean, std))
+                vals = [float(t) for t in tokens[1:]]
+                # Std = 1 means no effect because it was 0 and we workaround it to 1.
+                feature_metadata.append((tokens[0], vals[1] != 1, vals))
+            except ValueError:
+                # Categorized features: (name, used, [options])
+                feature_metadata.append((tokens[0], len(tokens) > 2, tokens[1:]))
+
+    net_dir = sys.argv[2]
+    valid_net_file = '{}/valid_net'.format(net_dir)
+    embed_net_file = '{}/embed_net'.format(net_dir)
+    rank_net_file = '{}/rank_score_net'.format(net_dir)
 
     # Load models.
     ctx = mx.cpu(0)
@@ -202,25 +164,27 @@ def main():
 
     def valid_model_forward(features):
         """Valid Model Inference."""
-        pred = valid_net(features)
-        return pred[0] > pred[1]
+        preds = valid_net(features)
+        return [(p[0] <= p[1]).tolist() for p in preds]
 
     def rank_model_forward(features):
         """Rank Model Inference."""
         assert len(features) == 2
         embeddings = embed_net(features)
-        lhs_embeddings = [embeddings[0]]
+        lhs_embeddings = mx.np.array([embeddings[0]])
         inner_lhs_embeddings = mx.np.expand_dims(lhs_embeddings, axis=1)
 
-        rhs_embeddings = [embeddings[1]]
+        rhs_embeddings = mx.np.array([embeddings[1]])
         rhs_embeddings = mx.np.expand_dims(rhs_embeddings, axis=0)
 
         inner_lhs_embeddings, rhs_embeddings = mx.np.broadcast_arrays(
             inner_lhs_embeddings, rhs_embeddings)
 
-        joint_embedding = mx.np.concatenate([inner_lhs_embeddings, rhs_embeddings,
-                                             mx.np.abs(inner_lhs_embeddings - rhs_embeddings),
-                                             inner_lhs_embeddings * rhs_embeddings], axis=-1)
+        joint_embedding = mx.np.concatenate([
+            inner_lhs_embeddings, rhs_embeddings,
+            mx.np.abs(inner_lhs_embeddings - rhs_embeddings), inner_lhs_embeddings * rhs_embeddings
+        ],
+                                            axis=-1)
 
         pred_rank_label_scores = rank_net(joint_embedding)
         pred = pred_rank_label_scores.argmax(axis=-1).astype(np.int32)
@@ -230,22 +194,28 @@ def main():
             return [0, 1]
         return [1, 0]
 
-
+    verify_model = True
     measure_option = autotvm.measure_option(
-        builder=DummyBuilder(),
+        builder=DummyBuilder if not verify_model else LocalBuilder(),
         runner=RankModelRunner(valid_model_forward=valid_model_forward,
                                rank_model_forward=rank_model_forward,
-                               number=10,
+                               feature_metadata=feature_metadata,
+                               verify_model_accuracy=verify_model,
+                               number=5,
                                repeat=1,
                                min_repeat_ms=1000),
     )
     tuning_option = {
         'log_filename': 'tune.log',
-        'tuner': 'random',  # TODO: tournament
+        'tuner': 'random',
         'early_stopping': None,
         'measure_option': measure_option,
     }
     tune_and_evaluate('resnet-18', 'float32', 1, 'cuda --model=t4', tuning_option)
+
+    if verify_model:
+        valid, rank = measure_option['runner'].get_model_acc()
+        print('\nModel accuracy: Valid %.2f%%; Rank %.2f%%' % (valid * 100.0, rank * 100.0))
 
 
 if __name__ == "__main__":

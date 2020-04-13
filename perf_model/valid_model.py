@@ -22,18 +22,19 @@ INVALID_LOG_THD = np.log(INVALID_THD)
 ### Class Declarations
 
 
-class ValidNet(nn.Block):
+class ValidNet(gluon.HybridBlock):
     """The network to predict if the config is valid or not."""
-    def __init__(self, hiddens, dropout, **kwargs):
-        super(ValidNet, self).__init__(**kwargs)
-        self.net = nn.Sequential()
-        for hidden in hiddens:
-            self.net.add(nn.Dense(hidden, activation='relu'))
-            self.net.add(nn.Dropout(dropout))
-        self.net.add(nn.Dense(2))
+    def __init__(self, hiddens, dropout):
+        super().__init__(prefix=None, params=None)
+        with self.name_scope():
+            self.net = nn.HybridSequential()
+            for hidden in hiddens:
+                self.net.add(nn.Dense(hidden, activation='relu'))
+                self.net.add(nn.Dropout(dropout))
+            self.net.add(nn.Dense(2))
 
-    def forward(self, X):  # pylint: disable=arguments-differ
-        return self.net(X)
+    def hybrid_forward(self, F, x, *args, **kwargs):
+        return self.net(x)
 
 ## Functions
 
@@ -108,7 +109,7 @@ def test_acc(net, test_feats, test_valids, print_log=True):
             else:
                 valid_error += 1 if pred_prob[0] > pred_prob[1] else 0
             if print_log:
-                log.info('Expected %s, predict (%.2f, %.2f)', hat, pred_prob[0], pred_prob[1])
+                log.debug('Expected %s, predict (%.2f, %.2f)', hat, pred_prob[0], pred_prob[1])
 
     valid_err_rate = 100.0 * valid_error / len(test_valids)
     if print_log:
@@ -151,6 +152,7 @@ def train_model(args, reporter=None):
     log.info('Hyper-Parameters:\n\t%s', '\n\t'.join(fparams))
 
     net = ValidNet(args.cls_hiddens, args.dropout)
+    net.hybridize()
     net.initialize(init.Xavier(), ctx=ctx)
     log.info('Model initialized on %s', str(ctx))
 
@@ -184,15 +186,15 @@ def train_model(args, reporter=None):
             metric.add(l_mean, 1)
             if reporter is None and iter_idx % 30 == 0:
                 progress.set_description_str(desc='Loss {:.3f}'.format(l_mean), refresh=True)
-        val_acc = test_acc(net, validate_feats, validate_valids, print_log=False)
-        if reporter is None:
-            log.info('Epoch %d: Loss %.3f, Valid Error %.2f%%', epoch,
-                     metric[0] / metric[1], val_acc)
-        else:
-            reporter(epoch=epoch, accuracy=val_acc)
+        #val_acc = test_acc(net, validate_feats, validate_valids, print_log=False)
+        #if reporter is None:
+        #    log.info('Epoch %d: Loss %.3f, Valid Error %.2f%%', epoch,
+        #             metric[0] / metric[1], val_acc)
+        #else:
+        #    reporter(epoch=epoch, accuracy=val_acc)
 
-    if reporter is None:
-        log.info('Final loss %.3f', metric[0] / metric[1])
+    #if reporter is None:
+    #    log.info('Final loss %.3f', metric[0] / metric[1])
 
     log.info('Testing...')
     test_acc(net, test_feats, test_valids)
@@ -211,4 +213,5 @@ if __name__ == "__main__":
     main_args.lr = 1e-2
     main_args.wd = 0.0001
     file_name = sys.argv[2]
-    train_model(main_args).save_parameters(file_name)
+    train_model(main_args).export(file_name)
+
