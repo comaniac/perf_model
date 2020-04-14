@@ -17,6 +17,7 @@ npx.set_np()
 
 class DummyBuilder(Builder):
     """A dummy builder for cost model."""
+
     def build(self, measure_inputs):
         """Build nothing."""
         return [BuildResult(None, None, None, 0) for _ in range(len(measure_inputs))]
@@ -93,6 +94,7 @@ class RankModelRunner(LocalRunner):
         scores = np.zeros(len(nd_used_features), dtype='int32')
         for idx1, feat1 in enumerate(nd_used_features):
             if not valids[idx1]:
+                scores[idx1] = -1 # Make sure invalid configs will have the lowest ranking.
                 continue
             for idx2, feat2 in enumerate(nd_used_features[idx1 + 1:]):
                 if not valids[idx2]:
@@ -107,8 +109,7 @@ class RankModelRunner(LocalRunner):
         results = []
         for idx, valid in enumerate(valids):
             if not valid:
-                results.append(MeasureResult([1e+5], MeasureErrorNo.RUNTIME_DEVICE, 0,
-                                             time.time()))
+                results.append(MeasureResult([1e+5], MeasureErrorNo.NO_ERROR, 0, time.time()))
             else:
                 results.append(MeasureResult([ranks[idx]], MeasureErrorNo.NO_ERROR, 0,
                                              time.time()))

@@ -10,9 +10,11 @@ from mxnet import gluon, npx
 
 import tvm
 import tvm.contrib.graph_runtime as runtime
-from measure import DummyBuilder, RankModelRunner
+from evaluator import DummyBuilder, RankModelRunner
+from round_tuner import RoundTuner
 from tvm import autotvm, relay
-from tvm.autotvm.measure.measure_methods import LocalBuilder
+from tvm.autotvm.measure import MeasureInput, create_measure_batch
+from tvm.autotvm.measure.measure_methods import LocalBuilder, LocalRunner
 from tvm.autotvm.tuner import GATuner, GridSearchTuner, RandomTuner, XGBTuner
 from tvm.relay import testing
 
@@ -65,8 +67,22 @@ def tune_kernels(tasks,
                  log_filename='tuning.log'):
     """Tune kernels with the ranking model."""
 
+    if tuner == 'round':
+        remeasure_option = autotvm.measure_option(
+            builder=LocalBuilder(),
+            runner=LocalRunner(number=5, repeat=3, min_repeat_ms=1000),
+        )
+    else:
+        remeasure_option = None
+
     for i, task in enumerate(tasks):
         prefix = "[Task %2d/%2d] " % (i + 1, len(tasks))
+        n_trial = 8000  #len(task.config_space)
+
+        callbacks = [
+            autotvm.callback.progress_bar(n_trial, prefix=prefix),
+            autotvm.callback.log_to_file(log_filename)
+        ]
 
         # create tuner
         if tuner == 'xgb' or tuner == 'xgb-rank':
@@ -77,18 +93,27 @@ def tune_kernels(tasks,
             tuner_obj = RandomTuner(task)
         elif tuner == 'gridsearch':
             tuner_obj = GridSearchTuner(task)
+        elif tuner == 'round':
+            tuner_obj = RoundTuner(task, n_cfg=8)
+            callbacks = callbacks[:1] # Do not record ranks.
         else:
             raise ValueError("Invalid tuner: " + tuner)
 
         # do tuning
-        n_trial = 128  #len(task.config_space)
         tuner_obj.tune(n_trial=n_trial,
                        early_stopping=early_stopping,
                        measure_option=measure_option,
-                       callbacks=[
-                           autotvm.callback.progress_bar(n_trial, prefix=prefix),
-                           autotvm.callback.log_to_file(log_filename)
-                       ])
+                       callbacks=callbacks)
+
+        # Round tuner needs an extra measurement step to get the real throughputs.
+        if tuner == 'round':
+            top_cfgs = tuner_obj.get_top_rank_cfgs()
+            measure_batch = create_measure_batch(task, remeasure_option)
+            inputs = [MeasureInput(task.target, task, config) for config in top_cfgs]
+            print(' Re-measuring %d top configs' % len(inputs), end='')
+            results = measure_batch(inputs)
+            print(', exporting', end='')
+            autotvm.callback.log_to_file(log_filename)(None, inputs, results)
 
 
 def tune_and_evaluate(model_name, dtype, batch_size, target, tuning_opt):
@@ -100,11 +125,10 @@ def tune_and_evaluate(model_name, dtype, batch_size, target, tuning_opt):
                                               target=target,
                                               params=params,
                                               ops=(relay.op.get("nn.conv2d"), ))
-    tasks = tasks[:1]
+    #tasks = tasks[:1]
 
     # run tuning tasks
     tune_kernels(tasks, **tuning_opt)
-    return
 
     with autotvm.apply_history_best(tuning_opt['log_filename']):
         print("Compile...")
@@ -194,9 +218,9 @@ def main():
             return [0, 1]
         return [1, 0]
 
-    verify_model = True
+    verify_model = False
     measure_option = autotvm.measure_option(
-        builder=DummyBuilder if not verify_model else LocalBuilder(),
+        builder=DummyBuilder() if not verify_model else LocalBuilder(),
         runner=RankModelRunner(valid_model_forward=valid_model_forward,
                                rank_model_forward=rank_model_forward,
                                feature_metadata=feature_metadata,
@@ -207,7 +231,7 @@ def main():
     )
     tuning_option = {
         'log_filename': 'tune.log',
-        'tuner': 'random',
+        'tuner': 'round',
         'early_stopping': None,
         'measure_option': measure_option,
     }
