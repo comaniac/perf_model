@@ -1,16 +1,16 @@
 """Run AutoTVM with the Ranking Model."""
 # pylint: disable=ungrouped-imports
 
+import glob
+import os
 import sys
-import warnings
 
-import mxnet as mx
 import numpy as np
-from mxnet import gluon, npx
+from mxnet import npx
 
 import tvm
 import tvm.contrib.graph_runtime as runtime
-from evaluator import DummyBuilder, RankModelRunner
+from evaluator import DummyBuilder, RankModel, RankModelRunner
 from round_tuner import RoundTuner
 from tvm import autotvm, relay
 from tvm.autotvm.measure import MeasureInput, create_measure_batch
@@ -19,7 +19,6 @@ from tvm.autotvm.tuner import GATuner, GridSearchTuner, RandomTuner, XGBTuner
 from tvm.relay import testing
 
 npx.set_np()
-
 
 def get_network(name, dtype, batch_size):
     """Get the symbol definition and random weight of a network"""
@@ -151,79 +150,22 @@ def tune_and_evaluate(model_name, dtype, batch_size, target, tuning_opt):
 
 
 def main():
-    """Main entry."""
+    """Main entry.
+    Usage: <model-dir>
+    Model directory should be organized as:
+    target-models/task-name/{valid_net.*, embed_net.*, rank_score_net.*, feature.meta}
+    """
 
-    # Load feature metadata.
-    feature_metadata = []
-    with open(sys.argv[1], 'r') as filep:
-        for line in filep:
-            tokens = line.replace('\n', '').split(',')
-            try:
-                # Numerical features: (name, used, (mean, std))
-                vals = [float(t) for t in tokens[1:]]
-                # Std = 1 means no effect because it was 0 and we workaround it to 1.
-                feature_metadata.append((tokens[0], vals[1] != 1, vals))
-            except ValueError:
-                # Categorized features: (name, used, [options])
-                feature_metadata.append((tokens[0], len(tokens) > 2, tokens[1:]))
-
-    net_dir = sys.argv[2]
-    valid_net_file = '{}/valid_net'.format(net_dir)
-    embed_net_file = '{}/embed_net'.format(net_dir)
-    rank_net_file = '{}/rank_score_net'.format(net_dir)
-
-    # Load models.
-    ctx = mx.cpu(0)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        valid_net = gluon.nn.SymbolBlock.imports("{}-symbol.json".format(valid_net_file), ['data'],
-                                                 "{}-0000.params".format(valid_net_file),
-                                                 ctx=ctx)
-        embed_net = gluon.nn.SymbolBlock.imports("{}-symbol.json".format(embed_net_file), ['data'],
-                                                 "{}-0000.params".format(embed_net_file),
-                                                 ctx=ctx)
-        rank_net = gluon.nn.SymbolBlock.imports("{}-symbol.json".format(rank_net_file), ['data'],
-                                                "{}-0000.params".format(rank_net_file),
-                                                ctx=ctx)
-
-    def valid_model_forward(features):
-        """Valid Model Inference."""
-        preds = valid_net(features)
-        return [(p[0] <= p[1]).tolist() for p in preds]
-
-    def rank_model_forward(features):
-        """Rank Model Inference."""
-        assert len(features) == 2
-        embeddings = embed_net(features)
-        lhs_embeddings = mx.np.array([embeddings[0]])
-        inner_lhs_embeddings = mx.np.expand_dims(lhs_embeddings, axis=1)
-
-        rhs_embeddings = mx.np.array([embeddings[1]])
-        rhs_embeddings = mx.np.expand_dims(rhs_embeddings, axis=0)
-
-        inner_lhs_embeddings, rhs_embeddings = mx.np.broadcast_arrays(
-            inner_lhs_embeddings, rhs_embeddings)
-
-        joint_embedding = mx.np.concatenate([
-            inner_lhs_embeddings, rhs_embeddings,
-            mx.np.abs(inner_lhs_embeddings - rhs_embeddings), inner_lhs_embeddings * rhs_embeddings
-        ],
-                                            axis=-1)
-
-        pred_rank_label_scores = rank_net(joint_embedding)
-        pred = pred_rank_label_scores.argmax(axis=-1).astype(np.int32)
-        if pred == 0:
-            return [1, 1]
-        elif pred == 1:
-            return [0, 1]
-        return [1, 0]
+    # Map from task name to model.
+    models = {}
+    for model_path in glob.glob(sys.argv[1]):
+        task_name = os.path.basename(model_path)
+        models[task_name] = RankModel(task_name, model_path)
 
     verify_model = False
     measure_option = autotvm.measure_option(
         builder=DummyBuilder() if not verify_model else LocalBuilder(),
-        runner=RankModelRunner(valid_model_forward=valid_model_forward,
-                               rank_model_forward=rank_model_forward,
-                               feature_metadata=feature_metadata,
+        runner=RankModelRunner(models=models,
                                verify_model_accuracy=verify_model,
                                number=5,
                                repeat=1,
