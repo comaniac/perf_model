@@ -2,6 +2,7 @@
 # pylint: disable=ungrouped-imports
 
 import os
+import sys
 import time
 import warnings
 
@@ -15,12 +16,11 @@ from tvm.autotvm.measure import LocalRunner, MeasureErrorNo, MeasureResult
 from tvm.autotvm.measure.measure import Builder
 from tvm.autotvm.measure.measure_methods import BuildResult
 
-npx.set_np()
-
 
 class RankModel():
     """A Ranking Model with A Valid Model."""
     def __init__(self, task_name, model_path):
+        npx.set_np()
         self.task_name = task_name
 
         # Parse feature metadata.
@@ -97,6 +97,10 @@ class RankModel():
 class DummyBuilder(Builder):
     """A dummy builder for cost model."""
 
+    def __init__(self):
+        """We can set a large value of n_parallel since we do not really build configs."""
+        super(DummyBuilder, self).__init__(n_parallel=8)
+
     def build(self, measure_inputs):
         """Build nothing."""
         return [BuildResult(None, None, None, 0) for _ in range(len(measure_inputs))]
@@ -143,7 +147,7 @@ class RankModelRunner(LocalRunner):
         features = []
         used_features = []
         for inp in measure_inputs:
-            task_name = inp.name
+            task_name = inp.task.name
             if task_name not in self.models:
                 raise RuntimeError('No cost model for %s' % task_name)
 
@@ -203,7 +207,7 @@ class RankModelRunner(LocalRunner):
                 self.model_accuracy[1] += 1 if real_valid != valid else 0
 
             costs = [
-                np.mean(r.costs) if v and r.error_no == MeasureErrorNo.NO_ERROR else 10e+5
+                np.mean(r.costs) if v and r.error_novul == MeasureErrorNo.NO_ERROR else 10e+5
                 for v, r in zip(valids, real_results)
             ]
             real_ranks = ss.rankdata(costs, method='dense').tolist()
@@ -212,3 +216,37 @@ class RankModelRunner(LocalRunner):
                 self.model_accuracy[2] += 1 if pred != real else 0
 
         return results
+
+def rank_progress(total, prefix):
+    """Display progress bar for ranking process.
+
+    Parameters
+    ----------
+    total: int
+        The total number of trials.
+
+    prefix: str
+        The prefix string for the progress bar.
+    """
+    class _Context(object):
+        """Context to store local variables"""
+        def __init__(self):
+            self.ct = 0
+            self.total = total
+
+    ctx = _Context()
+    tic = time.time()
+
+    sys.stdout.write('\r%s Progress: (%d/%d) | %.2f s' % (prefix, 0, total, time.time() - tic))
+    sys.stdout.flush()
+
+    def _callback(tuner, inputs, results):
+        ctx.ct += len(inputs)
+        if ctx.ct >= ctx.total:
+            sys.stdout.write('\r')
+        else:
+            sys.stdout.write('\r%s Progress: (%d/%d) | %.2f s' %
+                             (prefix, ctx.ct, ctx.total, time.time() - tic))
+        sys.stdout.flush()
+
+    return _callback

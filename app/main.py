@@ -1,16 +1,18 @@
 """Run AutoTVM with the Ranking Model."""
 # pylint: disable=ungrouped-imports
 
+import argparse
 import glob
 import os
+import re
 import sys
+import time
 
 import numpy as np
-from mxnet import npx
 
 import tvm
 import tvm.contrib.graph_runtime as runtime
-from evaluator import DummyBuilder, RankModel, RankModelRunner
+from evaluator import DummyBuilder, RankModel, RankModelRunner, rank_progress
 from round_tuner import RoundTuner
 from tvm import autotvm, relay
 from tvm.autotvm.measure import MeasureInput, create_measure_batch
@@ -18,45 +20,75 @@ from tvm.autotvm.measure.measure_methods import LocalBuilder, LocalRunner
 from tvm.autotvm.tuner import GATuner, GridSearchTuner, RandomTuner, XGBTuner
 from tvm.relay import testing
 
-npx.set_np()
 
-def get_network(name, dtype, batch_size):
+def create_config():
+    """Create the config parser of this app."""
+    parser = argparse.ArgumentParser(description='Tune Model with Cost Model')
+    parser.add_argument(
+        '--net',
+        required=True,
+        help='The directory of trained cost models.'
+        'Model directory should be organized as: '
+        'target-models/task-name/{valid_net.*, embed_net.*, rank_score_net.*, feature.meta}')
+    parser.add_argument('--target', required=True, help='The target platform')
+
+    model_group = parser.add_mutually_exclusive_group(required=True)
+    model_group.add_argument('--gcv', help='Model name in Gluon CV model zoo')
+    model_group.add_argument('--test', help='Model name in Relay testing')
+
+    return parser.parse_args()
+
+
+def get_relay_test_model(name):
     """Get the symbol definition and random weight of a network"""
-    input_shape = (batch_size, 3, 224, 224)
-    output_shape = (batch_size, 1000)
+
+    dtype = 'float32'
+    batch = 1
+    input_shape = (batch, 3, 224, 224) if name.find('inception') == -1 else (batch, 3, 299, 299)
 
     if "resnet" in name:
         n_layer = int(name.split('-')[1])
         mod, params = testing.resnet.get_workload(num_layers=n_layer,
-                                                  batch_size=batch_size,
+                                                  batch_size=batch,
                                                   dtype=dtype)
     elif "vgg" in name:
         n_layer = int(name.split('-')[1])
         mod, params = testing.vgg.get_workload(num_layers=n_layer,
-                                               batch_size=batch_size,
+                                               batch_size=batch,
                                                dtype=dtype)
     elif name == 'mobilenet':
-        mod, params = testing.mobilenet.get_workload(batch_size=batch_size, dtype=dtype)
+        mod, params = testing.mobilenet.get_workload(batch_size=batch, dtype=dtype)
     elif name == 'squeezenet_v1.1':
-        mod, params = testing.squeezenet.get_workload(batch_size=batch_size,
+        mod, params = testing.squeezenet.get_workload(batch_size=batch,
                                                       version='1.1',
                                                       dtype=dtype)
     elif name == 'inception_v3':
         input_shape = (1, 3, 299, 299)
-        mod, params = testing.inception_v3.get_workload(batch_size=batch_size, dtype=dtype)
-    elif name == 'mxnet':
-        # an example for mxnet model
-        from mxnet.gluon.model_zoo.vision import get_model
-        block = get_model('resnet18_v1', pretrained=True)
-        mod, params = relay.frontend.from_mxnet(block, shape={"data": input_shape}, dtype=dtype)
-        net = mod["main"]
-        net = relay.Function(net.params, relay.nn.softmax(net.body), None, net.type_params,
-                             net.attrs)
-        mod = tvm.IRModule.from_expr(net)
+        mod, params = testing.inception_v3.get_workload(batch_size=batch, dtype=dtype)
     else:
         raise ValueError("Unsupported network: " + name)
 
-    return mod, params, input_shape, output_shape
+    return mod, params, input_shape
+
+
+def get_gcv_model(model_name):
+    """Pull a Gluon CV model."""
+    import gluoncv as gcv
+
+    model_name = model_name.lower()
+
+    shape = (1, 3, 224, 224)
+    if model_name.find('inception') != -1:
+        shape = (1, 3, 299, 299)
+    elif model_name.find('yolo3') != -1:
+        shape = (1, 3, 320, 320)
+    elif model_name.startswith('ssd'):
+        tokens = re.search(r'ssd_(\d+)_', model_name)
+        size = int(tokens.group(1))
+        shape = (1, 3, size, size)
+    net = gcv.model_zoo.get_model(model_name, pretrained=True)
+    mod, params = relay.frontend.from_mxnet(net, shape={'data': shape})
+    return mod, params, shape
 
 
 def tune_kernels(tasks,
@@ -66,37 +98,48 @@ def tune_kernels(tasks,
                  log_filename='tuning.log'):
     """Tune kernels with the ranking model."""
 
+    remeasure_option = None
     if tuner == 'round':
+        # Setup another measure option for final remeasurment.
         remeasure_option = autotvm.measure_option(
             builder=LocalBuilder(),
             runner=LocalRunner(number=5, repeat=3, min_repeat_ms=1000),
         )
-    else:
-        remeasure_option = None
+
+        # Check if all tasks are covered by the cost model.
+        assert isinstance(measure_option['runner'], RankModelRunner)
+        for task in tasks:
+            if task.name not in measure_option['runner'].models:
+                raise RuntimeError('Task %s is not covered by cost models' % task.name)
 
     for i, task in enumerate(tasks):
         prefix = "[Task %2d/%2d] " % (i + 1, len(tasks))
-        n_trial = 8000  #len(task.config_space)
+        n_trial = 5000  #len(task.config_space)
 
-        callbacks = [
-            autotvm.callback.progress_bar(n_trial, prefix=prefix),
-            autotvm.callback.log_to_file(log_filename)
-        ]
+        callbacks = []
 
         # create tuner
-        if tuner == 'xgb' or tuner == 'xgb-rank':
-            tuner_obj = XGBTuner(task, loss_type='rank')
-        elif tuner == 'ga':
-            tuner_obj = GATuner(task, pop_size=50)
-        elif tuner == 'random':
-            tuner_obj = RandomTuner(task)
-        elif tuner == 'gridsearch':
-            tuner_obj = GridSearchTuner(task)
-        elif tuner == 'round':
+        if tuner == 'round':
             tuner_obj = RoundTuner(task, n_cfg=8)
-            callbacks = callbacks[:1] # Do not record ranks.
+            callbacks = [rank_progress(n_trial, prefix=prefix)] # Use different callbacks.
         else:
-            raise ValueError("Invalid tuner: " + tuner)
+            if tuner == 'xgb' or tuner == 'xgb-rank':
+                tuner_obj = XGBTuner(task, loss_type='rank')
+            elif tuner == 'ga':
+                tuner_obj = GATuner(task, pop_size=50)
+            elif tuner == 'random':
+                tuner_obj = RandomTuner(task)
+            elif tuner == 'gridsearch':
+                tuner_obj = GridSearchTuner(task)
+            else:
+                raise ValueError("Invalid tuner: " + tuner)
+
+            callbacks = [
+                autotvm.callback.progress_bar(n_trial, prefix=prefix),
+                autotvm.callback.log_to_file(log_filename)
+            ]
+
+        tic = time.time()
 
         # do tuning
         tuner_obj.tune(n_trial=n_trial,
@@ -109,24 +152,27 @@ def tune_kernels(tasks,
             top_cfgs = tuner_obj.get_top_rank_cfgs()
             measure_batch = create_measure_batch(task, remeasure_option)
             inputs = [MeasureInput(task.target, task, config) for config in top_cfgs]
-            print(' Re-measuring %d top configs' % len(inputs), end='')
+            sys.stdout.write('{} Measure Top 8 Configs'.format(prefix))
             results = measure_batch(inputs)
-            print(', exporting', end='')
+
+            best_flops = max([
+                i.task.flop / np.mean(r.costs) / 1e9 if r.error_no == 0 else 0
+                for i, r in zip(inputs, results)
+            ])
+            sys.stdout.write(' | Best %.2f GFLOPS | %.2fs\n' % (best_flops, time.time() - tic))
             autotvm.callback.log_to_file(log_filename)(None, inputs, results)
 
 
-def tune_and_evaluate(model_name, dtype, batch_size, target, tuning_opt):
+def tune_and_evaluate(mod, params, input_shape, dtype, batch_size, target, tuning_opt):
     """Tune a model with the ranking model and evaluate the performance."""
 
-    print("Extract tasks (conv2d only for now)...")
-    mod, params, input_shape, _ = get_network(model_name, dtype, batch_size)
+    print("Extract conv2d tasks...")
     tasks = autotvm.task.extract_from_program(mod["main"],
                                               target=target,
                                               params=params,
                                               ops=(relay.op.get("nn.conv2d"), ))
-    #tasks = tasks[:1]
 
-    # run tuning tasks
+    # Run tuning tasks.
     tune_kernels(tasks, **tuning_opt)
 
     with autotvm.apply_history_best(tuning_opt['log_filename']):
@@ -134,33 +180,38 @@ def tune_and_evaluate(model_name, dtype, batch_size, target, tuning_opt):
         with relay.build_config(opt_level=3):
             graph, lib, params = relay.build_module.build(mod, target=target, params=params)
 
-        # load parameters
+        # Load parameters.
         ctx = tvm.context(str(target), 0)
         module = runtime.create(graph, lib, ctx)
         data_tvm = tvm.nd.array((np.random.uniform(size=input_shape)).astype(dtype))
         module.set_input('data', data_tvm)
         module.set_input(**params)
 
-        # evaluate
+        # Evaluate performance.
         print("Evaluate inference time cost...")
-        ftimer = module.module.time_evaluator("run", ctx, number=1, repeat=600)
+        ftimer = module.module.time_evaluator("run", ctx, number=3, repeat=100)
         prof_res = np.array(ftimer().results) * 1000  # convert to millisecond
         print("Mean inference time (std dev): %.2f ms (%.2f ms)" %
               (np.mean(prof_res), np.std(prof_res)))
 
 
 def main():
-    """Main entry.
-    Usage: <model-dir>
-    Model directory should be organized as:
-    target-models/task-name/{valid_net.*, embed_net.*, rank_score_net.*, feature.meta}
-    """
+    """Main entry."""
+
+    configs = create_config()
+
+    # Get the model.
+    if configs.gcv:
+        mod, params, input_shape = get_gcv_model(configs.gcv)
+    else:
+        mod, params, input_shape = get_relay_test_model(configs.test)
 
     # Map from task name to model.
     models = {}
-    for model_path in glob.glob(sys.argv[1]):
+    for model_path in glob.glob('{}/*'.format(configs.net)):
         task_name = os.path.basename(model_path)
         models[task_name] = RankModel(task_name, model_path)
+        print('Loaded cost model for %s' % task_name)
 
     verify_model = False
     measure_option = autotvm.measure_option(
@@ -177,7 +228,7 @@ def main():
         'early_stopping': None,
         'measure_option': measure_option,
     }
-    tune_and_evaluate('resnet-18', 'float32', 1, 'cuda --model=t4', tuning_option)
+    tune_and_evaluate(mod, params, input_shape, 'float32', 1, configs.target, tuning_option)
 
     if verify_model:
         valid, rank = measure_option['runner'].get_model_acc()
