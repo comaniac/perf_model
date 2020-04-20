@@ -15,6 +15,7 @@ import tvm.contrib.graph_runtime as runtime
 from evaluator import DummyBuilder, RankModel, RankModelRunner, rank_progress
 from round_tuner import RoundTuner
 from tvm import autotvm, relay
+from tvm.autotvm.graph_tuner import DPTuner, PBQPTuner
 from tvm.autotvm.measure import MeasureInput, create_measure_batch
 from tvm.autotvm.measure.measure_methods import LocalBuilder, LocalRunner
 from tvm.autotvm.tuner import GATuner, GridSearchTuner, RandomTuner, XGBTuner
@@ -31,6 +32,7 @@ def create_config():
         'Model directory should be organized as: '
         'target-models/task-name/{valid_net.*, embed_net.*, rank_score_net.*, feature.meta}')
     parser.add_argument('--target', required=True, help='The target platform')
+    parser.add_argument('--n-parallel', type=int, default=8, help='The batch size for config evaluation')
 
     model_group = parser.add_mutually_exclusive_group(required=True)
     model_group.add_argument('--gcv', help='Model name in Gluon CV model zoo')
@@ -106,6 +108,7 @@ def tune_kernels(tasks,
             runner=LocalRunner(number=5, repeat=3, min_repeat_ms=1000),
         )
 
+
         # Check if all tasks are covered by the cost model.
         assert isinstance(measure_option['runner'], RankModelRunner)
         for task in tasks:
@@ -174,26 +177,42 @@ def tune_and_evaluate(mod, params, input_shape, dtype, batch_size, target, tunin
 
     # Run tuning tasks.
     tune_kernels(tasks, **tuning_opt)
+    if target.startswith('llvm'):
+        tune_graph(mod["main"], input_shape, target, tuning_opt['log_filename'], tuning_opt['graph_log_filename'])
 
-    with autotvm.apply_history_best(tuning_opt['log_filename']):
-        print("Compile...")
-        with relay.build_config(opt_level=3):
-            graph, lib, params = relay.build_module.build(mod, target=target, params=params)
+    dispatch_ctx = tvm.autotvm.task.DispatchContext.current
+    if target.startswith('llvm'):
+        tvm.autotvm.task.DispatchContext.current = autotvm.apply_graph_best(tuning_opt['graph_log_filename'])
+    else:
+        tvm.autotvm.task.DispatchContext.current = autotvm.apply_history_best(tuning_opt['log_filename'])
+    
+    print("Compile...")
+    with relay.build_config(opt_level=3):
+        graph, lib, params = relay.build_module.build(mod, target=target, params=params)
 
-        # Load parameters.
-        ctx = tvm.context(str(target), 0)
-        module = runtime.create(graph, lib, ctx)
-        data_tvm = tvm.nd.array((np.random.uniform(size=input_shape)).astype(dtype))
-        module.set_input('data', data_tvm)
-        module.set_input(**params)
+    # Load parameters.
+    ctx = tvm.context(str(target), 0)
+    module = runtime.create(graph, lib, ctx)
+    data_tvm = tvm.nd.array((np.random.uniform(size=input_shape)).astype(dtype))
+    module.set_input('data', data_tvm)
+    module.set_input(**params)
 
-        # Evaluate performance.
-        print("Evaluate inference time cost...")
-        ftimer = module.module.time_evaluator("run", ctx, number=3, repeat=100)
-        prof_res = np.array(ftimer().results) * 1000  # convert to millisecond
-        print("Mean inference time (std dev): %.2f ms (%.2f ms)" %
-              (np.mean(prof_res), np.std(prof_res)))
+    # Evaluate performance.
+    print("Evaluate inference time cost...")
+    ftimer = module.module.time_evaluator("run", ctx, number=3, repeat=100)
+    prof_res = np.array(ftimer().results) * 1000  # convert to millisecond
+    print("Mean inference time (std dev): %.2f ms (%.2f ms)" %
+          (np.mean(prof_res), np.std(prof_res)))
 
+
+def tune_graph(graph, dshape, target, records, opt_sch_file, use_DP=True):
+    """Use graph tuner to minimize layout transform on CPU."""
+    target_op = [relay.op.get("nn.conv2d"),]
+    Tuner = DPTuner if use_DP else PBQPTuner
+    executor = Tuner(graph, {'data': dshape}, records, target_op, target)
+    executor.benchmark_layout_transform(min_exec_num=2000)
+    executor.run()
+    executor.write_opt_sch2record_file(opt_sch_file)
 
 def main():
     """Main entry."""
@@ -215,7 +234,7 @@ def main():
 
     verify_model = False
     measure_option = autotvm.measure_option(
-        builder=DummyBuilder() if not verify_model else LocalBuilder(),
+        builder=DummyBuilder(configs.n_parallel) if not verify_model else LocalBuilder(),
         runner=RankModelRunner(models=models,
                                verify_model_accuracy=verify_model,
                                number=5,
@@ -224,6 +243,7 @@ def main():
     )
     tuning_option = {
         'log_filename': 'tune.log',
+        'graph_log_filename': 'graph.log',
         'tuner': 'round',
         'early_stopping': None,
         'measure_option': measure_option,

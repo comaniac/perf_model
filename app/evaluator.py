@@ -31,14 +31,17 @@ class RankModel():
         with open(meta_file, 'r') as filep:
             for line in filep:
                 tokens = line.replace('\n', '').split(',')
-                try:
-                    # Numerical features: (name, used, (mean, std))
-                    vals = [float(t) for t in tokens[1:]]
-                    # Std = 1 means no effect because it was 0 and we workaround it to 1.
-                    self.feature_metadata.append((tokens[0], vals[1] != 1, vals))
-                except ValueError:
-                    # Categorized features: (name, used, [options])
+                if tokens[0].startswith('ot_'):
                     self.feature_metadata.append((tokens[0], len(tokens) > 2, tokens[1:]))
+                else:
+                    try:
+                        # Numerical features: (name, used, (mean, std))
+                        vals = [float(t) for t in tokens[1:]]
+                        # Std = 1 means no effect because it was 0 and we workaround it to 1.
+                        self.feature_metadata.append((tokens[0], vals[1] != 1, vals))
+                    except ValueError:
+                        # Categorized features: (name, used, [options])
+                        self.feature_metadata.append((tokens[0], len(tokens) > 2, tokens[1:]))
 
         # Load models.
         valid_net_file = '{}/valid_net'.format(model_path)
@@ -97,9 +100,9 @@ class RankModel():
 class DummyBuilder(Builder):
     """A dummy builder for cost model."""
 
-    def __init__(self):
+    def __init__(self, n_parallel=8):
         """We can set a large value of n_parallel since we do not really build configs."""
-        super(DummyBuilder, self).__init__(n_parallel=8)
+        super(DummyBuilder, self).__init__(n_parallel=n_parallel)
 
     def build(self, measure_inputs):
         """Build nothing."""
@@ -158,7 +161,11 @@ class RankModelRunner(LocalRunner):
             for name, used, meta in self.models[task_name].feature_metadata:
                 val = None
                 if name in feat_dict:
-                    if isinstance(meta[0], str):
+                    if name.startswith('ot_'):
+                        val = meta.index(str(feat_dict[name]))
+                    elif name.startswith('sp_'):
+                        val = (feat_dict[name] - meta[0]) / meta[1]
+                    elif isinstance(meta[0], str):
                         val = meta.index(feat_dict[name])
                     elif isinstance(meta[0], float):
                         val = (feat_dict[name] - meta[0]) / meta[1]
