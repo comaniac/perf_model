@@ -33,6 +33,7 @@ def create_config():
         'target-models/task-name/{valid_net.*, embed_net.*, rank_score_net.*, feature.meta}')
     parser.add_argument('--target', required=True, help='The target platform')
     parser.add_argument('--n-parallel', type=int, default=8, help='The batch size for config evaluation')
+    parser.add_argument('--graph', default=False, help='Enable graph tuning (X86 only)')
 
     model_group = parser.add_mutually_exclusive_group(required=True)
     model_group.add_argument('--gcv', help='Model name in Gluon CV model zoo')
@@ -166,7 +167,7 @@ def tune_kernels(tasks,
             autotvm.callback.log_to_file(log_filename)(None, inputs, results)
 
 
-def tune_and_evaluate(mod, params, input_shape, dtype, batch_size, target, tuning_opt):
+def tune_and_evaluate(mod, params, input_shape, dtype, batch_size, target, tuning_opt, graph_log_file):
     """Tune a model with the ranking model and evaluate the performance."""
 
     print("Extract conv2d tasks...")
@@ -177,12 +178,12 @@ def tune_and_evaluate(mod, params, input_shape, dtype, batch_size, target, tunin
 
     # Run tuning tasks.
     tune_kernels(tasks, **tuning_opt)
-    if target.startswith('llvm'):
-        tune_graph(mod["main"], input_shape, target, tuning_opt['log_filename'], tuning_opt['graph_log_filename'])
+    if graph_log_file is not None:
+        tune_graph(mod["main"], input_shape, target, tuning_opt['log_filename'], graph_log_file)
 
     dispatch_ctx = tvm.autotvm.task.DispatchContext.current
-    if target.startswith('llvm'):
-        tvm.autotvm.task.DispatchContext.current = autotvm.apply_graph_best(tuning_opt['graph_log_filename'])
+    if graph_log_file is not None:
+        tvm.autotvm.task.DispatchContext.current = autotvm.apply_graph_best(graph_log_file)
     else:
         tvm.autotvm.task.DispatchContext.current = autotvm.apply_history_best(tuning_opt['log_filename'])
     
@@ -243,12 +244,17 @@ def main():
     )
     tuning_option = {
         'log_filename': 'tune.log',
-        'graph_log_filename': 'graph.log',
         'tuner': 'round',
         'early_stopping': None,
         'measure_option': measure_option,
     }
-    tune_and_evaluate(mod, params, input_shape, 'float32', 1, configs.target, tuning_option)
+
+    if configs.graph and not configs.target.startswith('llvm'):
+        print('WARNING: Graph tuner supports X86 only')
+        configs.graph = False
+
+    graph_log_file = 'graph.log' if configs.graph else None
+    tune_and_evaluate(mod, params, input_shape, 'float32', 1, configs.target, tuning_option, graph_log_file)
 
     if verify_model:
         valid, rank = measure_option['runner'].get_model_acc()

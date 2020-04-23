@@ -4,7 +4,7 @@ import glob
 import json
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from typing import Optional, Set
+from typing import Dict, List, Set
 
 import numpy as np
 import tqdm
@@ -13,7 +13,7 @@ from filelock import FileLock
 import topi  # pylint: disable=unused-import
 from tvm.autotvm.record import load_from_file
 from tvm.autotvm.task import create
-from tvm.autotvm.task.space import AnnotateEntity, OtherOptionEntity, SplitEntity
+from tvm.autotvm.task.space import AnnotateEntity, OtherOptionEntity, ReorderEntity, SplitEntity
 
 
 def create_config():
@@ -38,8 +38,8 @@ def create_config():
 
 
 def gen_key_str(inp):
-    """Generate a string of target and task name"""
-    return '{0}-{1}'.format(inp.task.name, str(inp.target).replace(' ', '').replace('=', '-'))
+    """Generate a string of target and task"""
+    return '{0}-{1}'.format(str(inp.task), str(inp.target).replace(' ', '').replace('=', '-'))
 
 
 def extract_feature(inp):
@@ -82,6 +82,8 @@ def extract_feature(inp):
             features['an_{0}'.format(key)] = val.anns
         elif isinstance(val, OtherOptionEntity):
             features['ot_{0}'.format(key)] = val.val
+        elif isinstance(val, ReorderEntity):
+            features['re_{0}'.format(key)] = '_'.join([str(a) for a in val.perm])
         else:
             raise RuntimeError("Unsupported config entity: " + val)
     return features
@@ -89,14 +91,14 @@ def extract_feature(inp):
 
 def extract_feature_from_file(log_file: str, out_path: str):
     """Parse a log file and extract featues to the output file"""
-    model_key: Optional[str] = None
-    data = []
+    data: Dict[str, List[str]] = {}
+
+    cnt = 0
     for inp, res in load_from_file(log_file):
-        if model_key is None:
-            model_key = gen_key_str(inp)
-        elif model_key != gen_key_str(inp):
-            print('Key mismatch %s <> %s, skip %s' % (model_key, gen_key_str(inp), str(inp)))
-            continue
+        cnt += 1
+        wkl_key = gen_key_str(inp)
+        if wkl_key not in data:
+            data[wkl_key] = []
 
         features = extract_feature(inp)
 
@@ -107,19 +109,16 @@ def extract_feature_from_file(log_file: str, out_path: str):
         else:
             features['thrpt'] = 0
 
-        data.append(json.dumps(features))
+        data[wkl_key].append(json.dumps(features))
 
-    if model_key is None:
-        print('No data processed')
-        return
-
-    out_file = '{0}/{1}.json'.format(out_path, model_key)
-    lock_file = '{0}.lock'.format(out_file)
-    with FileLock(lock_file):
-        with open(out_file, 'a') as filep:
-            for record in data:
-                filep.write(record)
-                filep.write('\n')
+    for wkl_key, feats in data.items():
+        out_file = '{0}/{1}.json'.format(out_path, wkl_key)
+        lock_file = '{0}.lock'.format(out_file)
+        with FileLock(lock_file):
+            with open(out_file, 'a') as filep:
+                for record in feats:
+                    filep.write(record)
+                    filep.write('\n')
 
 
 def featurize(log_path: str, out_path: str):
