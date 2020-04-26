@@ -5,19 +5,18 @@ import os
 import sys
 
 import d2l
+import pandas as pd
 import tqdm
 from mxnet import autograd, gluon, init, np, npx
 from mxnet.gluon import nn
 from mxnet.gluon.utils import split_and_load
 
 import logger
+from util import analyze_valid_threshold
 
 npx.set_np()
 
 log = logger.get_logger('VALID')
-
-INVALID_THD = 1 # Invalid throughput threshold (GFLOP/s).
-INVALID_LOG_THD = np.log(INVALID_THD)
 
 ### Class Declarations
 
@@ -40,6 +39,9 @@ class ValidNet(gluon.HybridBlock):
 
 def load_data(file_path, batch_size):
     """Load tabular feature data."""
+    invalid_thd = analyze_valid_threshold(file_path)
+    log.info('Invalid throughput is set to %.1f GFLOP/s', invalid_thd)
+
     log.info('Parsing file...')
     with open(file_path, 'r') as filep:
         next(filep)  # Get rid of headers
@@ -50,7 +52,7 @@ def load_data(file_path, batch_size):
         for line in tqdm.tqdm(filep):
             tokens = line.replace('\n', '').split(',')
             features.append([float(v) for v in tokens[:-1]])
-            valids.append(1 if float(tokens[-1]) > INVALID_THD else 0)
+            valids.append(1 if float(tokens[-1]) > invalid_thd else 0)
 
     log.info('Total data size %d', len(features))
 
@@ -66,9 +68,6 @@ def load_data(file_path, batch_size):
     num_valid = len(train_valid.nonzero()[0])
     num_invalid = len(train_valid) - num_valid
     pos_weight = num_invalid / num_valid
-
-    # One-hot encoding
-    #train_valid = nd.one_hot(train_valid.as_nd_ndarray(), 2).as_np_ndarray()
 
     train_iter = gluon.data.DataLoader(
         gluon.data.ArrayDataset(train_feats, train_valid),
@@ -120,8 +119,7 @@ def test_acc(net, test_feats, test_valids, print_log=True):
 
 def train_model(args, reporter=None):
     """Training process."""
-    logger.enable_log_file('train-{}'.format(
-        os.path.basename(args.data_file).replace('.csv', '.log')))
+    logger.enable_log_file('valid.log')
 
     ctx = d2l.try_all_gpus()
 
@@ -135,7 +133,7 @@ def train_model(args, reporter=None):
 
     # Initialize loss function.
     log.info('Positive weight for CELoss: %.2f', pos_weight)
-    valid_loss = gluon.loss.SoftmaxCrossEntropyLoss() #(weight=pos_weight, sparse_label=True)
+    valid_loss = gluon.loss.SoftmaxCrossEntropyLoss()
 
 
     fnet = [
@@ -200,8 +198,7 @@ def train_model(args, reporter=None):
     test_acc(net, test_feats, test_valids)
     return net
 
-
-if __name__ == "__main__":
+def main():
     main_args = argparse.Namespace()
 
     main_args.cls_hiddens = [128, 128]
@@ -215,3 +212,6 @@ if __name__ == "__main__":
     file_name = sys.argv[2]
     train_model(main_args).export(file_name)
 
+
+if __name__ == "__main__":
+    main()

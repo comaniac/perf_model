@@ -3,6 +3,8 @@
 import argparse
 import logging
 import os
+import sys
+from math import ceil
 
 import matplotlib.pyplot as plt
 import mxnet as mx
@@ -14,8 +16,9 @@ from mxnet.gluon import nn
 from numpy_nlp.utils.misc import logging_config, parse_ctx, set_seed
 from numpy_nlp.utils.parameter import grad_global_norm
 
+from util import analyze_valid_threshold
+
 mx.npx.set_np()
-INVALID_THD = 10  # Invalid throughput threshold ratio.
 
 
 def plot_save_figure(gt_thrpt, pred_thrpt, save_dir=None):
@@ -79,10 +82,15 @@ def parse_args():
 
 
 def get_data(args):
+    invalid_thd = analyze_valid_threshold(args.dataset)
+
     df = pd.read_csv(args.dataset)
     # Pre-filter the invalid through-puts.
-    # For these through-puts, we can directly obtain the result from the
-    df = df[df['thrpt'] >= INVALID_THD]
+    # For these throughputs, we can directly obtain the result from the ValidNet
+    logging.info('Invalid throughput is set to %.1f GFLOP/s', invalid_thd)
+    df = df[df['thrpt'] >= invalid_thd]
+    assert df.shape[0] > 0
+
     used_keys = []
     not_used_keys = []
     for key in df.keys():

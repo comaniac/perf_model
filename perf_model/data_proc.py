@@ -3,6 +3,7 @@ import argparse
 import glob
 import json
 import os
+import shutil
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Dict, List, Set
 
@@ -13,7 +14,8 @@ from filelock import FileLock
 import topi  # pylint: disable=unused-import
 from tvm.autotvm.record import load_from_file
 from tvm.autotvm.task import create
-from tvm.autotvm.task.space import AnnotateEntity, OtherOptionEntity, ReorderEntity, SplitEntity
+from tvm.autotvm.task.space import (AnnotateEntity, OtherOptionEntity,
+                                    ReorderEntity, SplitEntity)
 
 
 def create_config():
@@ -40,6 +42,10 @@ def create_config():
 def gen_key_str(inp):
     """Generate a string of target and task"""
     return '{0}-{1}'.format(str(inp.task), str(inp.target).replace(' ', '').replace('=', '-'))
+
+def gen_file_str(inp):
+    """Generate a string as the output file name"""
+    return inp.task.name
 
 
 def extract_feature(inp):
@@ -79,11 +85,19 @@ def extract_feature(inp):
             for idx, elt in enumerate(val.size):
                 features['sp_{0}_{1}'.format(key, idx)] = elt
         elif isinstance(val, AnnotateEntity):
-            features['an_{0}'.format(key)] = val.anns
+            if isinstance(val.anns, (int, float)):
+                pval = str(val.anns)
+            elif isinstance(val.anns, str):
+                pval = val.anns
+            elif isinstance(val.anns, list):
+                pval = ';'.join([str(e) for e in val.anns])
+            else:
+                raise RuntimeError('Unrecognized annotate type: %s' % type(val.anns))
+            features['an_{0}'.format(key)] = pval
         elif isinstance(val, OtherOptionEntity):
             features['ot_{0}'.format(key)] = val.val
         elif isinstance(val, ReorderEntity):
-            features['re_{0}'.format(key)] = '_'.join([str(a) for a in val.perm])
+            features['re_{0}'.format(key)] = ';'.join([str(a) for a in val.perm])
         else:
             raise RuntimeError("Unsupported config entity: " + val)
     return features
@@ -96,11 +110,14 @@ def extract_feature_from_file(log_file: str, out_path: str):
     cnt = 0
     for inp, res in load_from_file(log_file):
         cnt += 1
-        wkl_key = gen_key_str(inp)
-        if wkl_key not in data:
-            data[wkl_key] = []
+        key = (gen_key_str(inp), gen_file_str(inp))
+        if key not in data:
+            data[key] = []
 
-        features = extract_feature(inp)
+        try:
+            features = extract_feature(inp)
+        except Exception as err:
+            return str(err)
 
         # Compute GFLOP/s
         task = create(inp.task.name, inp.task.args, inp.target)
@@ -109,16 +126,17 @@ def extract_feature_from_file(log_file: str, out_path: str):
         else:
             features['thrpt'] = 0
 
-        data[wkl_key].append(json.dumps(features))
+        data[key].append(json.dumps(features))
 
-    for wkl_key, feats in data.items():
-        out_file = '{0}/{1}.json'.format(out_path, wkl_key)
+    for (_, file_key), feats in data.items():
+        out_file = '{0}/{1}.json'.format(out_path, file_key)
         lock_file = '{0}.lock'.format(out_file)
         with FileLock(lock_file):
             with open(out_file, 'a') as filep:
                 for record in feats:
                     filep.write(record)
                     filep.write('\n')
+    return None
 
 
 def featurize(log_path: str, out_path: str):
@@ -145,11 +163,13 @@ def featurize(log_path: str, out_path: str):
                 pool.submit(extract_feature_from_file, log_file, out_path)
                 for log_file in file_list[start:min(start + 8, len(file_list))]
             ]
-            for _ in as_completed(futures):
-                pass
+            for ret in as_completed(futures):
+                msg = ret.result()
+                if msg:
+                    print(msg)
 
     # Remove lock files
-    os.remove('{0}/*.lock'.format(out_path))
+    shutil.rmtree('{0}/*.lock'.format(out_path), ignore_errors=True)
 
 
 def json2csv(json_path: str, std: bool, out_path: str):
@@ -206,6 +226,7 @@ def json2csv(json_path: str, std: bool, out_path: str):
                 tran_data = np.array(dataframe).T
                 # pylint: disable=unsubscriptable-object
                 for feat, row in zip(feature_list[:-1], tran_data[:-1]):
+                    val_type = 'numeric'
                     try:  # Standardize floating values.
                         float_row = row.astype('float')
                         meta = [float_row.mean(), float_row.std()]
@@ -215,8 +236,10 @@ def json2csv(json_path: str, std: bool, out_path: str):
                         meta = np.unique(row)
                         cate_map = {c: i for i, c in enumerate(meta)}
                         std_data.append([cate_map[c] for c in row])
+                        val_type = 'category'
 
-                    filep.write('{},'.format(feat))
+                    filep.write('{},'.format(feat)) # Feature name
+                    filep.write('{},'.format(val_type)) # Feature value type (numeric or category)
                     filep.write(','.join([str(e) for e in meta]))
                     filep.write('\n')
 

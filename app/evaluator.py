@@ -31,17 +31,20 @@ class RankModel():
         with open(meta_file, 'r') as filep:
             for line in filep:
                 tokens = line.replace('\n', '').split(',')
-                if tokens[0].startswith('ot_'):
-                    self.feature_metadata.append((tokens[0], len(tokens) > 2, tokens[1:]))
+                if tokens[1] == 'category':
+                    # Categorized features: (name, used, type, [options])
+                    self.feature_metadata.append(
+                        (tokens[0], len(tokens) > 3, tokens[1], tokens[2:]))
                 else:
                     try:
-                        # Numerical features: (name, used, (mean, std))
-                        vals = [float(t) for t in tokens[1:]]
+                        # Numerical features: (name, used, type, (mean, std))
+                        vals = [float(t) for t in tokens[2:]]
+                        assert len(vals) == 2
                         # Std = 1 means no effect because it was 0 and we workaround it to 1.
-                        self.feature_metadata.append((tokens[0], vals[1] != 1, vals))
+                        self.feature_metadata.append((tokens[0], vals[1] != 1, tokens[1], vals))
                     except ValueError:
-                        # Categorized features: (name, used, [options])
-                        self.feature_metadata.append((tokens[0], len(tokens) > 2, tokens[1:]))
+                        raise RuntimeError('%s is numeric but cannot be converted to float' %
+                                           tokens[0])
 
         # Load models.
         valid_net_file = '{}/valid_net'.format(model_path)
@@ -158,17 +161,13 @@ class RankModelRunner(LocalRunner):
 
             feat = []
             used_feat = []
-            for name, used, meta in self.models[task_name].feature_metadata:
+            for name, used, feat_type, meta in self.models[task_name].feature_metadata:
                 val = None
                 if name in feat_dict:
-                    if name.startswith('ot_'):
+                    if feat_type == 'numeric':
+                        val = (feat_dict[name] - meta[0]) / meta[1]
+                    else:
                         val = meta.index(str(feat_dict[name]))
-                    elif name.startswith('sp_'):
-                        val = (feat_dict[name] - meta[0]) / meta[1]
-                    elif isinstance(meta[0], str):
-                        val = meta.index(feat_dict[name])
-                    elif isinstance(meta[0], float):
-                        val = (feat_dict[name] - meta[0]) / meta[1]
                 feat.append(val)
                 if used:
                     used_feat.append(val)
