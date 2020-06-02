@@ -199,7 +199,7 @@ def train_bert(args, reporter=None):
 
     log.info('Loading data from %s...', args.data_file)
     (train_iter, validate_feats, validate_thrpts, test_feats, test_thrpts,
-     thrpt_boundaries) = load_data(args.data_file, args.batch_size, args.num_cls)
+     _) = load_data(args.data_file, args.batch_size, args.num_cls)
     validate_feats = np.array(validate_feats, ctx=ctx[0])
     validate_thrpts = np.array(validate_thrpts, ctx=ctx[0])
     test_feats = np.array(test_feats, ctx=ctx[0])
