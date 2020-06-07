@@ -5,7 +5,7 @@ import json
 import os
 import shutil
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Tuple
 
 import numpy as np
 import tqdm
@@ -42,6 +42,10 @@ def create_config():
 def gen_key_str(inp):
     """Generate a string of target and task"""
     return '{0}-{1}'.format(str(inp.task), str(inp.target).replace(' ', '').replace('=', '-'))
+
+def gen_target_str(inp):
+    """Generate a string of target"""
+    return str(inp.target).replace(' ', '').replace('=', '-')
 
 def gen_file_str(inp):
     """Generate a string as the output file name"""
@@ -105,18 +109,18 @@ def extract_feature(inp):
 
 def extract_feature_from_file(log_file: str, out_path: str):
     """Parse a log file and extract featues to the output file"""
-    data: Dict[str, List[str]] = {}
+    data: Dict[Tuple[str, str, str], List[str]] = {}
 
     cnt = 0
     for inp, res in load_from_file(log_file):
         cnt += 1
-        key = (gen_key_str(inp), gen_file_str(inp))
+        key = (gen_key_str(inp), gen_target_str(inp), gen_file_str(inp))
         if key not in data:
             data[key] = []
 
         try:
             features = extract_feature(inp)
-        except Exception as err:
+        except Exception as err: # pylint: disable=broad-except
             return str(err)
 
         # Compute GFLOP/s
@@ -128,8 +132,10 @@ def extract_feature_from_file(log_file: str, out_path: str):
 
         data[key].append(json.dumps(features))
 
-    for (_, file_key), feats in data.items():
-        out_file = '{0}/{1}.json'.format(out_path, file_key)
+    for (_, target_key, file_key), feats in data.items():
+        if not os.path.exists(os.path.join(out_path, target_key)):
+            os.mkdir(os.path.join(out_path, target_key))
+        out_file = '{0}/{1}/{2}.json'.format(out_path, target_key, file_key)
         lock_file = '{0}.lock'.format(out_file)
         with FileLock(lock_file):
             with open(out_file, 'a') as filep:
