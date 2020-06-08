@@ -11,7 +11,9 @@ sequence_length = 32
 for name in list_backbone_names():
     model_cls, cfg, tokenizer, local_params_path, others = get_backbone(model_name=name)
     net = model_cls.from_cfg(cfg)
+    net.initialize()
     net.hybridize()
+    print(net)
     inputs = mx.np.random.randint(0, 10, (batch_size, sequence_length))
     token_types = mx.np.random.randint(0, 2, (batch_size, sequence_length))
     valid_length = mx.np.random.randint(1, 10, (batch_size,))
