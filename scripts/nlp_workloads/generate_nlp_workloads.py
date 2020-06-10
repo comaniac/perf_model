@@ -1,22 +1,13 @@
 import json
 import mxnet as mx
-# Once numpy_nlp is merged as a branch. Rmove the line to gluonnlp
-from numpy_nlp.models import list_backbone_names, get_backbone
-from numpy_nlp.utils.misc import count_parameters
+from gluonnlp.models import list_backbone_names, get_backbone
+from gluonnlp.utils.misc import count_parameters
 
 mx.npx.set_np()
 batch_size = 1
 sequence_length = 32
-
-for name in ['google_en_uncased_bert_base',
-             'google_en_uncased_bert_large',
-             'google_albert_base_v2',
-             'google_albert_large_v2',
-             'google_albert_xlarge_v2',
-             'google_albert_xxlarge_v2',
-             'google_electra_small',
-             'google_electra_base',
-             'google_electra_large']:
+all_possible_ops = []
+for name in list_backbone_names():
     model_cls, cfg, tokenizer, local_params_path, others = get_backbone(model_name=name)
     net = model_cls.from_cfg(cfg)
     net.initialize()
@@ -35,3 +26,8 @@ for name in ['google_en_uncased_bert_base',
             all_ops.add(ele['op'])
     with open('{}_all_ops.json'.format(name), 'w') as f:
         json.dump(list(all_ops), f)
+    all_possible_ops.extend(list(all_ops))
+
+with open('all_possible_ops.json', 'r') as f:
+    json.dump(list(set(all_possible_ops)), f)
+
