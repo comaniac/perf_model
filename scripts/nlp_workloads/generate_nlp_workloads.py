@@ -28,6 +28,6 @@ for name in list_backbone_names():
         json.dump(list(all_ops), f)
     all_possible_ops.extend(list(all_ops))
 
-with open('all_possible_ops.json', 'r') as f:
+with open('all_possible_ops.json', 'w') as f:
     json.dump(list(set(all_possible_ops)), f)
 
