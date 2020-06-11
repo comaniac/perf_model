@@ -1,7 +1,6 @@
 import json
 import mxnet as mx
 from gluonnlp.models import list_backbone_names, get_backbone
-from gluonnlp.utils.misc import count_parameters
 
 mx.npx.set_np()
 batch_size = 1
@@ -34,3 +33,9 @@ for name in list_backbone_names():
 with open('all_possible_ops.json', 'w') as f:
     json.dump(list(set(all_possible_ops)), f)
 
+
+from tvm.relay.frontend.mxnet import _convert_map
+
+for op in all_possible_ops:
+    if op not in _convert_map:
+        print(op)
