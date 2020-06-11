@@ -12,7 +12,7 @@ for name in list_backbone_names():
     net = model_cls.from_cfg(cfg)
     net.initialize()
     net.hybridize()
-    print(net)
+    print('Save the architecture of {} to {}.json'.format(name, name))
     inputs = mx.np.random.randint(0, 10, (batch_size, sequence_length))
     token_types = mx.np.random.randint(0, 2, (batch_size, sequence_length))
     valid_length = mx.np.random.randint(1, 10, (batch_size,))
