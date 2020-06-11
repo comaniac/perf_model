@@ -16,7 +16,7 @@ for name in list_backbone_names():
     inputs = mx.np.random.randint(0, 10, (batch_size, sequence_length))
     token_types = mx.np.random.randint(0, 2, (batch_size, sequence_length))
     valid_length = mx.np.random.randint(1, 10, (batch_size,))
-    if 'roberta' in name:
+    if 'roberta' in name or 'xlmr' in name:
         out = net(inputs, valid_length)
     else:
         out = net(inputs, token_types, valid_length)
