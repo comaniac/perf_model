@@ -13,10 +13,7 @@ import pandas as pd
 from mxnet import gluon
 from mxnet.gluon import nn
 
-from numpy_nlp.utils.misc import logging_config, parse_ctx, set_seed
-from numpy_nlp.utils.parameter import grad_global_norm
-
-from util import analyze_valid_threshold
+from util import analyze_valid_threshold, logging_config, parse_ctx, set_seed, grad_global_norm
 
 mx.npx.set_np()
 
