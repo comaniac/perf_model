@@ -10,6 +10,11 @@ cd tests; sh train.sh
 cd tests; sh auto_train.sh
 ```
 
+### Download the Example Dataset
+
+```bash
+aws s3 cp s3://hyuz-shared-data/gcv_cuda_csv/depthwise_conv2d_nchw.cuda-cuda-model-t4.csv .
+```
 
 ### Use AutoGluon Tabular
 

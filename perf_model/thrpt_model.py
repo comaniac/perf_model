@@ -396,6 +396,7 @@ def train_nn(args, train_df, test_df):
     best_val_loss_f.close()
     test_loss_f.close()
 
+
 def main():
     args = parse_args()
     set_seed(args.seed)
@@ -409,6 +410,7 @@ def main():
         train_nn(args, train_df, test_df)
     else:
         raise NotImplementedError
+
 
 if __name__ == "__main__":
     main()
