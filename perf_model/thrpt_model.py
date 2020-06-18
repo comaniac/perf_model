@@ -135,19 +135,6 @@ def train_regression_autogluon(args, train_df, test_df):
     mx.npx.set_np()
 
 
-def train_ranking_catboost(_, train_df, test_df):
-    import catboost
-    params = {'loss_function': 'YetiRank'}
-    train_features, train_labels = get_feature_label(train_df)
-    test_features, test_labels = get_feature_label(test_df)
-    train_pool = catboost.Pool(data=train_features, label=train_labels)
-    test_pool = catboost.Pool(data=test_features, label=test_labels)
-    model = catboost.CatBoost(params)
-    model.fit(X=train_pool)
-    predict_result = model.predict(test_pool)
-    logging.info(predict_result)
-
-
 class EmbedNet(gluon.HybridBlock):
     def __init__(self, num_hidden=64, num_layer=2, dropout=0.1, prefix=None, params=None):
         super().__init__(prefix=prefix, params=params)
@@ -395,6 +382,19 @@ def train_nn(args, train_df, test_df):
                     no_better_val_cnt = 0
     best_val_loss_f.close()
     test_loss_f.close()
+
+
+def train_ranking_catboost(_, train_df, test_df):
+    import catboost
+    params = {'loss_function': 'YetiRank'}
+    train_features, train_labels = get_feature_label(train_df)
+    test_features, test_labels = get_feature_label(test_df)
+    train_pool = catboost.Pool(data=train_features, label=train_labels)
+    test_pool = catboost.Pool(data=test_features, label=test_labels)
+    model = catboost.CatBoost(params)
+    model.fit(X=train_pool)
+    predict_result = model.predict(test_pool)
+    logging.info(predict_result)
 
 
 def main():
