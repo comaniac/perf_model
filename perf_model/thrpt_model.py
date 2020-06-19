@@ -396,8 +396,9 @@ def train_nn(args, train_df, test_df):
 def train_ranking_catboost(args, train_df, test_df):
     import catboost
     params = {'loss_function': args.rank_loss_function,
-              'custom_metric': ['NDCG'],
+              'custom_metric': ['NDCG', 'AverageGain:top=10'],
               'task_type': 'GPU',
+              'eval_metric': 'NDCG',
               'verbose': True,
               'train_dir': args.out_dir,
               'random_seed': args.seed}
