@@ -445,7 +445,14 @@ def train_ranking_catboost(args, train_df, test_df):
     test_rank_labels = np.concatenate(test_rank_labels, axis=0)
     test_groups = np.concatenate(test_groups, axis=0)
     # Save the generated train + test features
-
+    np.savez(os.path.join(args.out_dir, 'train_rank_features.npz'),
+             train_rank_features=train_rank_features,
+             train_rank_labels=train_rank_labels,
+             train_groups=train_groups)
+    np.savez(os.path.join(args.out_dir, 'test_rank_features.npz'),
+             test_rank_features=test_rank_features,
+             test_rank_labels=test_rank_labels,
+             test_groups=test_groups)
 
     train_pool = catboost.Pool(data=train_rank_features,
                                label=train_rank_labels,
