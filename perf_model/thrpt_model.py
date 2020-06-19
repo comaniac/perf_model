@@ -3,7 +3,9 @@
 import argparse
 import logging
 import os
+import tqdm
 import sys
+import pickle
 from math import ceil
 
 import matplotlib.pyplot as plt
@@ -12,11 +14,9 @@ import numpy as np
 import pandas as pd
 from mxnet import gluon
 from mxnet.gluon import nn
+from sklearn.metrics import ndcg_score
 
-from numpy_nlp.utils.misc import logging_config, parse_ctx, set_seed
-from numpy_nlp.utils.parameter import grad_global_norm
-
-from util import analyze_valid_threshold
+from util import analyze_valid_threshold, logging_config, parse_ctx, set_seed, grad_global_norm
 
 mx.npx.set_np()
 
@@ -49,10 +49,18 @@ def parse_args():
     parser.add_argument('--algo', choices=['auto', 'cat', 'nn'],
                         default='nn',
                         help='The algorithm to use.')
-    parser.add_argument('--test_ratio', type=float, default=0.2,
+    parser.add_argument('--test_ratio', type=float, default=0.1,
                         help='ratio of the test data.')
-    parser.add_argument('--dev_ratio', type=float, default=0.2,
+    parser.add_argument('--dev_ratio', type=float, default=0.1,
                         help='ratio of the test data.')
+    rank_args = parser.add_argument_group('ranking')
+    rank_args.add_argument('--num_threshold_bins', default=5, type=int)
+    rank_args.add_argument('--group_size', default=40, type=int)
+    rank_args.add_argument('--sample_mult', default=5, type=int)
+    rank_args.add_argument('--rank_loss_function',
+                           choices=['YetiRank', 'YetiRankPairwise'])
+    rank_args.add_argument('--test_seed', default=123, type=int)
+    rank_args.add_argument('--dev_seed', default=1234, type=int)
     parser.add_argument('--lr', type=float, default=1E-3,
                         help='The learning rate of the throuphput model.')
     parser.add_argument('--wd', type=float, default=0.0,
@@ -136,19 +144,6 @@ def train_regression_autogluon(args, train_df, test_df):
                      pred_thrpt=test_prediction,
                      save_dir=args.out_dir)
     mx.npx.set_np()
-
-
-def train_ranking_catboost(_, train_df, test_df):
-    import catboost
-    params = {'loss_function': 'YetiRank'}
-    train_features, train_labels = get_feature_label(train_df)
-    test_features, test_labels = get_feature_label(test_df)
-    train_pool = catboost.Pool(data=train_features, label=train_labels)
-    test_pool = catboost.Pool(data=test_features, label=test_labels)
-    model = catboost.CatBoost(params)
-    model.fit(X=train_pool)
-    predict_result = model.predict(test_pool)
-    logging.info(predict_result)
 
 
 class EmbedNet(gluon.HybridBlock):
@@ -399,6 +394,125 @@ def train_nn(args, train_df, test_df):
     best_val_loss_f.close()
     test_loss_f.close()
 
+
+def train_ranking_catboost(args, train_df, test_df):
+    import catboost
+    params = {'loss_function': args.rank_loss_function,
+              'custom_metric': ['NDCG', 'AverageGain:top=10'],
+              'task_type': 'GPU',
+              'iterations': args.niter,
+              'verbose': True,
+              'train_dir': args.out_dir,
+              'random_seed': args.seed}
+    train_dev_features, train_dev_labels = get_feature_label(train_df)
+    test_features, test_labels = get_feature_label(test_df)
+
+    # Split Train/Dev
+    shuffle_idx = np.random.permutation(train_dev_features.shape[0])
+    train_dev_features, train_dev_labels = \
+        train_dev_features[shuffle_idx], train_dev_labels[shuffle_idx]
+    num_train = train_dev_features.shape[0] - int(args.dev_ratio * train_dev_features.shape[0])
+    train_features, train_labels = train_dev_features[:num_train], train_dev_labels[:num_train]
+    dev_features, dev_labels = train_dev_features[num_train:], train_dev_labels[num_train:]
+
+
+    # Generate the training/testing samples for ranking.
+    # We divide the samples into multiple bins and will do stratified sampling within each bin.
+    sorted_train_ids = np.argsort(train_labels)
+    train_group_ids_list = np.array_split(sorted_train_ids, args.num_threshold_bins)
+
+    sorted_dev_ids = np.argsort(dev_labels)
+    dev_group_ids_list = np.array_split(sorted_dev_ids, args.num_threshold_bins)
+
+    sorted_test_ids = np.argsort(test_labels)
+    test_group_ids_list = np.array_split(sorted_test_ids, args.num_threshold_bins)
+
+    train_rank_features = []
+    train_rank_labels = []
+    train_groups = []
+
+    dev_rank_features = []
+    dev_rank_labels = []
+    dev_groups = []
+
+    test_rank_features = []
+    test_rank_labels = []
+    test_groups = []
+    print('Generate Train Ranking Groups:')
+    for i in tqdm.tqdm(range(len(train_features) * args.sample_mult)):
+        for group_ids in train_group_ids_list:
+            chosen_ids = np.random.choice(group_ids,
+                                          args.group_size // args.num_threshold_bins,
+                                          replace=False)
+            train_rank_features.append(train_features[chosen_ids, :])
+            train_rank_labels.append(train_labels[chosen_ids])
+            train_groups.append(np.ones_like(chosen_ids) * i)
+    train_rank_features = np.concatenate(train_rank_features, axis=0)
+    train_rank_labels = np.concatenate(train_rank_labels, axis=0)
+    train_groups = np.concatenate(train_groups, axis=0)
+
+    print('Generate Dev Ranking Groups:')
+    for i in tqdm.tqdm(range(len(dev_features) * args.sample_mult)):
+        for group_ids in dev_group_ids_list:
+            chosen_ids = np.random.choice(group_ids,
+                                          args.group_size // args.num_threshold_bins,
+                                          replace=False)
+            dev_rank_features.append(dev_features[chosen_ids, :])
+            dev_rank_labels.append(dev_labels[chosen_ids])
+            dev_groups.append(np.ones_like(chosen_ids) * i)
+    dev_rank_features = np.concatenate(dev_rank_features, axis=0)
+    dev_rank_labels = np.concatenate(dev_rank_labels, axis=0)
+    dev_groups = np.concatenate(dev_groups, axis=0)
+
+    test_rng = np.random.RandomState(args.test_seed)
+    print('Generate Test Ranking Groups:')
+    for i in tqdm.tqdm(range(len(test_features) * args.sample_mult)):
+        for group_ids in test_group_ids_list:
+            chosen_ids = test_rng.choice(group_ids,
+                                         args.group_size // args.num_threshold_bins,
+                                         replace=False)
+            test_rank_features.append(test_features[chosen_ids, :])
+            test_rank_labels.append(test_labels[chosen_ids])
+            test_groups.append(np.ones_like(chosen_ids) * i)
+    test_rank_features = np.concatenate(test_rank_features, axis=0)
+    test_rank_labels = np.concatenate(test_rank_labels, axis=0)
+    test_groups = np.concatenate(test_groups, axis=0)
+
+    # Save the generated train + dev + test features
+    np.savez(os.path.join(args.out_dir, 'train_rank_features.npz'),
+             train_rank_features=train_rank_features,
+             train_rank_labels=train_rank_labels,
+             train_groups=train_groups)
+    np.savez(os.path.join(args.out_dir, 'dev_rank_features.npz'),
+             dev_rank_features=dev_rank_features,
+             dev_rank_labels=dev_rank_labels,
+             dev_groups=dev_groups)
+    np.savez(os.path.join(args.out_dir, 'test_rank_features.npz'),
+             test_rank_features=test_rank_features,
+             test_rank_labels=test_rank_labels,
+             test_groups=test_groups)
+
+    train_pool = catboost.Pool(data=train_rank_features,
+                               label=train_rank_labels,
+                               group_id=train_groups)
+    dev_pool = catboost.Pool(data=dev_rank_features,
+                             label=dev_rank_labels,
+                             group_id=dev_groups)
+    # test_pool = catboost.Pool(data=test_rank_features,
+    #                           label=test_rank_labels,
+    #                           group_id=test_groups)
+    model = catboost.CatBoost(params)
+    model.fit(train_pool, eval_set=dev_pool)
+    predict_result = model.predict(test_rank_features)
+
+    test_gt_scores = test_rank_labels.reshape(len(test_features) * args.sample_mult, args.group_size)
+    predict_result = predict_result.reshape((len(test_features) * args.sample_mult, args.group_size))
+    np.save(os.path.join(args.out_dir, 'test_predictions.npy'), predict_result)
+    test_ndcg_score = ndcg_score(y_true=test_gt_scores, y_score=predict_result)
+    logging.info('Test NDCG={}'.format(test_ndcg_score))
+    model.save_model(os.path.join(args.out_dir, 'rank_model.cbm'))
+
+
 def main():
     args = parse_args()
     set_seed(args.seed)
@@ -412,6 +526,7 @@ def main():
         train_nn(args, train_df, test_df)
     else:
         raise NotImplementedError
+
 
 if __name__ == "__main__":
     main()
