@@ -503,7 +503,7 @@ def train_ranking_catboost(args, train_df, test_df):
                               group_id=test_groups)
     model = catboost.CatBoost(params)
     model.fit(train_pool, eval_set=dev_pool)
-    predict_result = model.predict(test_pool)
+    predict_result = model.predict(test_rank_features)
 
     test_gt_scores = test_rank_labels.reshape(len(test_features) * args.sample_mult, args.group_size)
     predict_result = predict_result.reshape((len(test_features) * args.sample_mult, args.group_size))
