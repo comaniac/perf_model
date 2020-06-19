@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 from mxnet import gluon
 from mxnet.gluon import nn
-from sklearn.metrics import ndcg_score¶
+from sklearn.metrics import ndcg_score
 
 from util import analyze_valid_threshold, logging_config, parse_ctx, set_seed, grad_global_norm
 
