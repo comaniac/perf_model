@@ -498,9 +498,9 @@ def train_ranking_catboost(args, train_df, test_df):
     dev_pool = catboost.Pool(data=dev_rank_features,
                              label=dev_rank_labels,
                              group_id=dev_groups)
-    test_pool = catboost.Pool(data=test_rank_features,
-                              label=test_rank_labels,
-                              group_id=test_groups)
+    # test_pool = catboost.Pool(data=test_rank_features,
+    #                           label=test_rank_labels,
+    #                           group_id=test_groups)
     model = catboost.CatBoost(params)
     model.fit(train_pool, eval_set=dev_pool)
     predict_result = model.predict(test_rank_features)
@@ -510,6 +510,8 @@ def train_ranking_catboost(args, train_df, test_df):
     np.save(os.path.join(args.out_dir, 'test_predictions.npy'), predict_result)
     test_ndcg_score = ndcg_score(y_true=test_gt_scores, y_score=predict_result)
     logging.info('Test NDCG={}'.format(test_ndcg_score))
+    model.save_model(os.path.join(args.out_dir, 'rank_model.cbm'))
+
 
 def main():
     args = parse_args()
