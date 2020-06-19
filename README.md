@@ -31,7 +31,7 @@ python thrpt_model.py --dataset depthwise_conv2d_nchw.cuda.csv --algo nn --gpus 
 ### Learning to Rank (Listwise) with Catboost
 
 ```bash
-python thrpt_model.py --dataset depthwise_conv2d_nchw.cuda.csv --algo nn --gpus 0 --out_dir thrpt_nn_model
+python thrpt_model.py --dataset depthwise_conv2d_nchw.cuda.csv --algo cat --rank_loss_function YetiRank --gpus 0 --out_dir thrpt_cat_model
 ```
 
 Also, in [tune_params](tune_params), we have included a script for parameter tuning.

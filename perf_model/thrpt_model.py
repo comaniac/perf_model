@@ -404,10 +404,10 @@ def train_ranking_catboost(args, train_df, test_df):
     # Generate the training/testing samples for ranking.
     # We divide the samples into multiple bins and will do stratified sampling within each bin.
     sorted_train_ids = np.argsort(train_labels)
-    train_group_ids_list = np.split(sorted_train_ids, args.num_threshold_bins)
+    train_group_ids_list = np.array_split(sorted_train_ids, args.num_threshold_bins)
 
     sorted_test_ids = np.argsort(test_labels)
-    test_group_ids_list = np.split(sorted_test_ids, args.num_threshold_bins)
+    test_group_ids_list = np.array_split(sorted_test_ids, args.num_threshold_bins)
 
     train_rank_features = []
     train_rank_labels = []
