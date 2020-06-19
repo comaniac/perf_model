@@ -505,7 +505,7 @@ def train_ranking_catboost(args, train_df, test_df):
     model.fit(train_pool, eval_set=dev_pool)
     predict_result = model.predict(test_pool)
 
-    test_gt_scores = test_rank_labels.reshape(len(test_features), args.g)
+    test_gt_scores = test_rank_labels.reshape(len(test_features), args.group_size)
     predict_result = predict_result.reshape((len(test_features), args.group_size))
     np.save(os.path.join(args.out_dir, 'test_predictions.npy'), predict_result)
     test_ndcg_score = ndcg_score(y_true=test_gt_scores, y_score=predict_result)
