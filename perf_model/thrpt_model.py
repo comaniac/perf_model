@@ -397,7 +397,6 @@ def train_ranking_catboost(args, train_df, test_df):
     import catboost
     params = {'loss_function': args.rank_loss_function,
               'custom_metric': ['NDCG', 'AverageGain:top=10'],
-              'test_metrics': ['NDCG'],
               'task_type': 'GPU',
               'verbose': True,
               'train_dir': args.out_dir,
@@ -445,6 +444,9 @@ def train_ranking_catboost(args, train_df, test_df):
     test_rank_features = np.concatenate(test_rank_features, axis=0)
     test_rank_labels = np.concatenate(test_rank_labels, axis=0)
     test_groups = np.concatenate(test_groups, axis=0)
+    # Save the generated train + test features
+
+
     train_pool = catboost.Pool(data=train_rank_features,
                                label=train_rank_labels,
                                group_id=train_groups)
