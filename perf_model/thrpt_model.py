@@ -3,6 +3,7 @@
 import argparse
 import logging
 import os
+import tqdm
 import sys
 import pickle
 from math import ceil
@@ -416,9 +417,8 @@ def train_ranking_catboost(args, train_df, test_df):
     test_rank_features = []
     test_rank_labels = []
     test_groups = []
-    for i in range(len(train_df) * args.sample_mult):
-        if i % 10000 == 0:
-            print('Generate Train Ranking Groups:', i)
+    print('Generate Train Ranking Groups:')
+    for i in tqdm.tqdm(range(len(train_df) * args.sample_mult)):
         for group_ids in train_group_ids_list:
             chosen_ids = np.random.choice(group_ids,
                                           args.group_size // args.num_threshold_bins,
@@ -431,9 +431,8 @@ def train_ranking_catboost(args, train_df, test_df):
     train_groups = np.concatenate(train_groups, axis=0)
 
     test_rng = np.random.RandomState(123)
-    for i in range(len(test_df) * args.sample_mult):
-        if i % 1000 == 0:
-            print('Generate Test Ranking Groups:', i)
+    print('Generate Test Ranking Groups:')
+    for i in tqdm.tqdm(range(len(test_df) * args.sample_mult)):
         for group_ids in test_group_ids_list:
             chosen_ids = test_rng.choice(group_ids,
                                          args.group_size // args.num_threshold_bins,
