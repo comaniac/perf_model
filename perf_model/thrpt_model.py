@@ -398,7 +398,6 @@ def train_ranking_catboost(args, train_df, test_df):
     params = {'loss_function': args.rank_loss_function,
               'custom_metric': ['NDCG', 'AverageGain:top=10'],
               'task_type': 'GPU',
-              'eval_metric': 'NDCG',
               'verbose': True,
               'train_dir': args.out_dir,
               'random_seed': args.seed}
@@ -462,7 +461,7 @@ def train_ranking_catboost(args, train_df, test_df):
                               label=test_rank_labels,
                               group_id=test_groups)
     model = catboost.CatBoost(params)
-    model.fit(X=train_pool)
+    model.fit(X=train_pool, eval_set=test_pool)
     predict_result = model.predict(test_pool)
     np.save(os.path.join(args.out_dir, 'test_predictions.npy'), predict_result)
 
