@@ -417,7 +417,7 @@ def train_ranking_catboost(args, train_df, test_df):
     test_rank_labels = []
     test_groups = []
     for i in range(len(train_df) * args.sample_mult):
-        if i % 1000 == 0:
+        if i % 10000 == 0:
             print('Generate Train Ranking Groups:', i)
         for group_ids in train_group_ids_list:
             chosen_ids = np.random.choice(group_ids,
