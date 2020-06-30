@@ -30,10 +30,16 @@ def create_config():
         required=True,
         help='The directory of trained cost models.'
         'Model directory should be organized as: '
-        'target-models/task-name/{valid_net.*, embed_net.*, rank_score_net.*, feature.meta}')
+        'target-models/task-name/{valid_net.*, embed_net.*, rank_score_net.*, feature.meta}'
+    )
     parser.add_argument('--target', required=True, help='The target platform')
-    parser.add_argument('--n-parallel', type=int, default=8, help='The batch size for config evaluation')
-    parser.add_argument('--graph', default=False, help='Enable graph tuning (X86 only)')
+    parser.add_argument('--n-parallel',
+                        type=int,
+                        default=8,
+                        help='The batch size for config evaluation')
+    parser.add_argument('--graph',
+                        default=False,
+                        help='Enable graph tuning (X86 only)')
 
     model_group = parser.add_mutually_exclusive_group(required=True)
     model_group.add_argument('--gcv', help='Model name in Gluon CV model zoo')
@@ -47,7 +53,9 @@ def get_relay_test_model(name):
 
     dtype = 'float32'
     batch = 1
-    input_shape = (batch, 3, 224, 224) if name.find('inception') == -1 else (batch, 3, 299, 299)
+    input_shape = (batch, 3, 224,
+                   224) if name.find('inception') == -1 else (batch, 3, 299,
+                                                              299)
 
     if "resnet" in name:
         n_layer = int(name.split('-')[1])
@@ -60,14 +68,16 @@ def get_relay_test_model(name):
                                                batch_size=batch,
                                                dtype=dtype)
     elif name == 'mobilenet':
-        mod, params = testing.mobilenet.get_workload(batch_size=batch, dtype=dtype)
+        mod, params = testing.mobilenet.get_workload(batch_size=batch,
+                                                     dtype=dtype)
     elif name == 'squeezenet_v1.1':
         mod, params = testing.squeezenet.get_workload(batch_size=batch,
                                                       version='1.1',
                                                       dtype=dtype)
     elif name == 'inception_v3':
         input_shape = (1, 3, 299, 299)
-        mod, params = testing.inception_v3.get_workload(batch_size=batch, dtype=dtype)
+        mod, params = testing.inception_v3.get_workload(batch_size=batch,
+                                                        dtype=dtype)
     else:
         raise ValueError("Unsupported network: " + name)
 
@@ -109,12 +119,12 @@ def tune_kernels(tasks,
             runner=LocalRunner(number=5, repeat=3, min_repeat_ms=1000),
         )
 
-
         # Check if all tasks are covered by the cost model.
         assert isinstance(measure_option['runner'], RankModelRunner)
         for task in tasks:
             if task.name not in measure_option['runner'].models:
-                raise RuntimeError('Task %s is not covered by cost models' % task.name)
+                raise RuntimeError('Task %s is not covered by cost models' %
+                                   task.name)
 
     for i, task in enumerate(tasks):
         prefix = "[Task %2d/%2d] " % (i + 1, len(tasks))
@@ -125,9 +135,10 @@ def tune_kernels(tasks,
         # create tuner
         if tuner == 'round':
             tuner_obj = RoundTuner(task, n_cfg=8)
-            callbacks = [rank_progress(n_trial, prefix=prefix)] # Use different callbacks.
+            callbacks = [rank_progress(n_trial, prefix=prefix)
+                         ]  # Use different callbacks.
         else:
-            if tuner == 'xgb' or tuner == 'xgb-rank':
+            if tuner in ('xgb', 'xgb-rank'):
                 tuner_obj = XGBTuner(task, loss_type='rank')
             elif tuner == 'ga':
                 tuner_obj = GATuner(task, pop_size=50)
@@ -155,7 +166,9 @@ def tune_kernels(tasks,
         if tuner == 'round':
             top_cfgs = tuner_obj.get_top_rank_cfgs()
             measure_batch = create_measure_batch(task, remeasure_option)
-            inputs = [MeasureInput(task.target, task, config) for config in top_cfgs]
+            inputs = [
+                MeasureInput(task.target, task, config) for config in top_cfgs
+            ]
             sys.stdout.write('{} Measure Top 8 Configs'.format(prefix))
             results = measure_batch(inputs)
 
@@ -163,38 +176,47 @@ def tune_kernels(tasks,
                 i.task.flop / np.mean(r.costs) / 1e9 if r.error_no == 0 else 0
                 for i, r in zip(inputs, results)
             ])
-            sys.stdout.write(' | Best %.2f GFLOPS | %.2fs\n' % (best_flops, time.time() - tic))
+            sys.stdout.write(' | Best %.2f GFLOPS | %.2fs\n' %
+                             (best_flops, time.time() - tic))
             autotvm.callback.log_to_file(log_filename)(None, inputs, results)
 
 
-def tune_and_evaluate(mod, params, input_shape, dtype, batch_size, target, tuning_opt, graph_log_file):
+def tune_and_evaluate(mod, params, input_shape, dtype, target, tuning_opt, graph_log_file):
     """Tune a model with the ranking model and evaluate the performance."""
 
     print("Extract conv2d tasks...")
-    tasks = autotvm.task.extract_from_program(mod["main"],
-                                              target=target,
-                                              params=params,
-                                              ops=(relay.op.get("nn.conv2d"), ))
+    tasks = autotvm.task.extract_from_program(
+        mod["main"],
+        target=target,
+        params=params,
+        ops=(relay.op.get("nn.conv2d"), ))
 
     # Run tuning tasks.
     tune_kernels(tasks, **tuning_opt)
     if graph_log_file is not None:
-        tune_graph(mod["main"], input_shape, target, tuning_opt['log_filename'], graph_log_file)
+        tune_graph(mod["main"], input_shape, target,
+                   tuning_opt['log_filename'], graph_log_file)
 
     dispatch_ctx = tvm.autotvm.task.DispatchContext.current
     if graph_log_file is not None:
-        tvm.autotvm.task.DispatchContext.current = autotvm.apply_graph_best(graph_log_file)
+        tvm.autotvm.task.DispatchContext.current = autotvm.apply_graph_best(
+            graph_log_file)
     else:
-        tvm.autotvm.task.DispatchContext.current = autotvm.apply_history_best(tuning_opt['log_filename'])
-    
+        tvm.autotvm.task.DispatchContext.current = autotvm.apply_history_best(
+            tuning_opt['log_filename'])
+
     print("Compile...")
     with relay.build_config(opt_level=3):
-        graph, lib, params = relay.build_module.build(mod, target=target, params=params)
+        graph, lib, params = relay.build_module.build(mod,
+                                                      target=target,
+                                                      params=params)
+    tvm.autotvm.task.DispatchContext.current = dispatch_ctx
 
     # Load parameters.
     ctx = tvm.context(str(target), 0)
     module = runtime.create(graph, lib, ctx)
-    data_tvm = tvm.nd.array((np.random.uniform(size=input_shape)).astype(dtype))
+    data_tvm = tvm.nd.array(
+        (np.random.uniform(size=input_shape)).astype(dtype))
     module.set_input('data', data_tvm)
     module.set_input(**params)
 
@@ -206,14 +228,17 @@ def tune_and_evaluate(mod, params, input_shape, dtype, batch_size, target, tunin
           (np.mean(prof_res), np.std(prof_res)))
 
 
-def tune_graph(graph, dshape, target, records, opt_sch_file, use_DP=True):
+def tune_graph(graph, dshape, target, records, opt_sch_file, use_dp=True):
     """Use graph tuner to minimize layout transform on CPU."""
-    target_op = [relay.op.get("nn.conv2d"),]
-    Tuner = DPTuner if use_DP else PBQPTuner
+    target_op = [
+        relay.op.get("nn.conv2d"),
+    ]
+    Tuner = DPTuner if use_dp else PBQPTuner
     executor = Tuner(graph, {'data': dshape}, records, target_op, target)
     executor.benchmark_layout_transform(min_exec_num=2000)
     executor.run()
     executor.write_opt_sch2record_file(opt_sch_file)
+
 
 def main():
     """Main entry."""
@@ -235,7 +260,8 @@ def main():
 
     verify_model = False
     measure_option = autotvm.measure_option(
-        builder=DummyBuilder(configs.n_parallel) if not verify_model else LocalBuilder(),
+        builder=DummyBuilder(configs.n_parallel)
+        if not verify_model else LocalBuilder(),
         runner=RankModelRunner(models=models,
                                verify_model_accuracy=verify_model,
                                number=5,
@@ -254,11 +280,13 @@ def main():
         configs.graph = False
 
     graph_log_file = 'graph.log' if configs.graph else None
-    tune_and_evaluate(mod, params, input_shape, 'float32', 1, configs.target, tuning_option, graph_log_file)
+    tune_and_evaluate(mod, params, input_shape, 'float32', configs.target,
+                      tuning_option, graph_log_file)
 
     if verify_model:
         valid, rank = measure_option['runner'].get_model_acc()
-        print('\nModel accuracy: Valid %.2f%%; Rank %.2f%%' % (valid * 100.0, rank * 100.0))
+        print('\nModel accuracy: Valid %.2f%%; Rank %.2f%%' %
+              (valid * 100.0, rank * 100.0))
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ from tvm.autotvm.tuner import RandomTuner
 
 
 class RoundTuner(RandomTuner):
+    """Tune the task with a latency ranking model."""
     def __init__(self, task, n_cfg):
         super(RoundTuner, self).__init__(task)
 
@@ -19,17 +20,20 @@ class RoundTuner(RandomTuner):
         """Generate the next batch with the pivot"""
         if self.pivot_cfg is None:
             return super(RoundTuner, self).next_batch(batch_size)
-        return super(RoundTuner, self).next_batch(batch_size - 1) + [self.pivot_cfg]
+        return super(RoundTuner,
+                     self).next_batch(batch_size - 1) + [self.pivot_cfg]
 
     def update(self, inputs, results):
         """Update top rank configs and the pivot."""
 
         # Sort configs by results. result.costs should be the ranking instead of latency.
         ranked_cfgs = [
-            x[0].config for x in sorted(zip(inputs, results), key=lambda x: x[1].costs[0])
+            x[0].config
+            for x in sorted(zip(inputs, results), key=lambda x: x[1].costs[0])
         ]
 
-        pivot_cfg_str = str(self.pivot_cfg) if self.pivot_cfg is not None else None
+        pivot_cfg_str = str(
+            self.pivot_cfg) if self.pivot_cfg is not None else None
         if pivot_cfg_str is None:
             # Take n_cfgs from the first batch to make sure we have enough cfgs.
             self.top_cfgs = ranked_cfgs[:min(len(inputs), self.n_cfg)]
