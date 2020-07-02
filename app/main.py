@@ -12,7 +12,8 @@ import numpy as np
 
 import tvm
 import tvm.contrib.graph_runtime as runtime
-from evaluator import DummyBuilder, RankModel, RankModelRunner, rank_progress
+from evaluator import (DummyBuilder, ListwiseRankModel, RankModelRunner,
+                       PairwiseRankModel, rank_progress)
 from round_tuner import RoundTuner
 from tvm import autotvm, relay
 from tvm.autotvm.graph_tuner import DPTuner, PBQPTuner
@@ -26,11 +27,18 @@ def create_config():
     """Create the config parser of this app."""
     parser = argparse.ArgumentParser(description='Tune Model with Cost Model')
     parser.add_argument(
-        '--net',
-        required=True,
-        help='The directory of trained cost models.'
+        '--pair-net',
+        default=None,
+        help='The directory of trained pairwise ranking models.'
         'Model directory should be organized as: '
         'target-models/task-name/{valid_net.*, embed_net.*, rank_score_net.*, feature.meta}'
+    )
+    parser.add_argument(
+        '--list-net',
+        default=None,
+        help='The directory of trained listwise ranking models.'
+        'Model directory should be organized as: '
+        'target-models/task-name/{valid_net.*, list_rank_net.cbm, feature.meta}'
     )
     parser.add_argument('--target', required=True, help='The target platform')
     parser.add_argument('--n-parallel',
@@ -181,7 +189,8 @@ def tune_kernels(tasks,
             autotvm.callback.log_to_file(log_filename)(None, inputs, results)
 
 
-def tune_and_evaluate(mod, params, input_shape, dtype, target, tuning_opt, graph_log_file):
+def tune_and_evaluate(mod, params, input_shape, dtype, target, tuning_opt,
+                      graph_log_file):
     """Tune a model with the ranking model and evaluate the performance."""
 
     print("Extract conv2d tasks...")
@@ -252,13 +261,20 @@ def main():
         mod, params, input_shape = get_relay_test_model(configs.test)
 
     # Map from task name to model.
-    models = {}
-    for model_path in glob.glob('{}/*'.format(configs.net)):
-        task_name = os.path.basename(model_path)
-        models[task_name] = RankModel(task_name, model_path)
-        print('Loaded cost model for %s' % task_name)
-
     verify_model = False
+    models = {}
+    if configs.pair_net is not None:
+        for model_path in glob.glob('{}/*'.format(configs.pair_net)):
+            task_name = os.path.basename(model_path)
+            models[task_name] = PairwiseRankModel(task_name, model_path)
+            print('Loaded cost model for %s' % task_name)
+    else:
+        assert configs.list_net is not None
+        for model_path in glob.glob('{}/*'.format(configs.list_net)):
+            task_name = os.path.basename(model_path)
+            models[task_name] = ListwiseRankModel(task_name, model_path)
+            print('Loaded cost model for %s' % task_name)
+
     measure_option = autotvm.measure_option(
         builder=DummyBuilder(configs.n_parallel)
         if not verify_model else LocalBuilder(),
@@ -285,8 +301,7 @@ def main():
 
     if verify_model:
         valid, rank = measure_option['runner'].get_model_acc()
-        print('\nModel accuracy: Valid %.2f%%; Rank %.2f%%' %
-              (valid * 100.0, rank * 100.0))
+        print('\nModel accuracy: Valid %.2f%%; NDCG %.3f' % (valid * 100.0, rank))
 
 
 if __name__ == "__main__":
