@@ -36,8 +36,6 @@ class DummyBuilder(Builder):
 class RankModel():
     """A Ranking Model with A Valid Model."""
     def __init__(self, task_name, model_path):
-        npx.set_np()
-
         # Parse feature metadata.
         meta_file = os.path.join(model_path, 'feature.meta')
         if not os.path.exists(meta_file):
@@ -190,6 +188,7 @@ class PairwiseRankModel(RankModel):
     """A Pairwise Ranking Model with A Valid Model."""
     def load_models(self, model_path):
         """Load models."""
+        npx.set_np()
         valid_net_file = '{}/valid_net'.format(model_path)
         embed_net_file = '{}/embed_net'.format(model_path)
         rank_net_file = '{}/rank_score_net'.format(model_path)
@@ -268,28 +267,20 @@ class ListwiseRankModel(RankModel):
     """A Elementwise Ranking Model with A Valid Model."""
     def load_models(self, model_path):
         """Load models."""
-        valid_net_file = '{}/valid_net'.format(model_path)
+        valid_net_file = '{}/valid_model'.format(model_path)
         rank_net_file = '{}/list_rank_net'.format(model_path)
 
-        ctx = mx.cpu(0)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            self.valid_net = gluon.nn.SymbolBlock.imports(
-                "{}-symbol.json".format(valid_net_file), ['data'],
-                "{}-0000.params".format(valid_net_file),
-                ctx=ctx)
+            self.valid_net = catboost.CatBoostClassifier().load_model(
+                "{}.cbm".format(valid_net_file))
             self.rank_net = catboost.CatBoost().load_model(
                 "{}.cbm".format(rank_net_file))
 
     def valid_model_forward(self, features):
         """Valid Model Inference."""
-        # FIXME
-        # nd_features = mx.np.array(features)
-        # preds = self.valid_net(nd_features)
-        # print([(p[0] <= p[1]).tolist() for p in preds])
-        # assert False
-        # return [(p[0] <= p[1]).asnumpy()[0] for p in preds]
-        return [True] * len(features)
+        valids = self.valid_net.predict(features)
+        return [v == 1 for v in valids]
 
     def rank_model_forward(self, valids, features):
         """Rank Model Inference."""
