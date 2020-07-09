@@ -164,8 +164,7 @@ class RankModelRunner(LocalRunner):
                                   time.time()))
 
         if self.verify_model_accuracy:
-            real_results = super(RankModelRunner,
-                                 self).run(measure_inputs, build_results)
+            real_results = super(RankModelRunner, self).run(measure_inputs, build_results)
             self.model_accuracy[0] += len(real_results)
 
             for valid, ret in zip(valids, real_results):
@@ -174,7 +173,7 @@ class RankModelRunner(LocalRunner):
 
             costs = [
                 np.mean(r.costs)
-                if v and r.error_novul == MeasureErrorNo.NO_ERROR else 10e+5
+                if v and r.error_no == MeasureErrorNo.NO_ERROR else 10e+5
                 for v, r in zip(valids, real_results)
             ]
             ndcg = ndcg_score(y_true=[costs],
@@ -267,20 +266,23 @@ class ListwiseRankModel(RankModel):
     """A Elementwise Ranking Model with A Valid Model."""
     def load_models(self, model_path):
         """Load models."""
-        valid_net_file = '{}/valid_model'.format(model_path)
-        rank_net_file = '{}/list_rank_net'.format(model_path)
+        valid_net_file = '{}/valid_model.cbm'.format(model_path)
+        rank_net_file = '{}/list_rank_net.cbm'.format(model_path)
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            self.valid_net = catboost.CatBoostClassifier().load_model(
-                "{}.cbm".format(valid_net_file))
-            self.rank_net = catboost.CatBoost().load_model(
-                "{}.cbm".format(rank_net_file))
+            if os.path.exists(valid_net_file):
+                self.valid_net = catboost.CatBoostClassifier().load_model(valid_net_file)
+            else:
+                self.valid_net = None
+            self.rank_net = catboost.CatBoost().load_model(rank_net_file)
 
     def valid_model_forward(self, features):
         """Valid Model Inference."""
-        valids = self.valid_net.predict(features)
-        return [v == 1 for v in valids]
+        if self.valid_net is not None:
+            valids = self.valid_net.predict(features)
+            return [v == 1 for v in valids]
+        return [True] * len(features)
 
     def rank_model_forward(self, valids, features):
         """Rank Model Inference."""

@@ -277,7 +277,7 @@ def main():
 
     measure_option = autotvm.measure_option(
         builder=DummyBuilder(configs.n_parallel)
-        if not verify_model else LocalBuilder(),
+        if not verify_model else LocalBuilder(n_parallel=configs.n_parallel),
         runner=RankModelRunner(models=models,
                                verify_model_accuracy=verify_model,
                                number=5,

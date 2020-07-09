@@ -122,12 +122,25 @@ def parse_args():
         type=str,
         default='0',
         help='list of gpus to run, e.g. 0 or 0,2,5. -1 means using cpu.')
+    parser.add_argument(
+        '--thrpt-threshold',
+        type=float,
+        default=0,
+        help='The throughput threshold. -1 means adaptive threshold')
+    parser.add_argument(
+        '--max-data-size',
+        type=int,
+        default=524288,
+        help='The maximum number of records in dataset')
     args = parser.parse_args()
     return args
 
 
 def get_data(args):
-    invalid_thd = analyze_valid_threshold(args.dataset)
+    if args.thrpt_threshold == -1:
+        invalid_thd = analyze_valid_threshold(args.dataset)
+    else:
+        invalid_thd = 0
 
     df = pd.read_csv(args.dataset)
     # Pre-filter the invalid through-puts.
@@ -150,6 +163,11 @@ def get_data(args):
     logging.info('Original keys=%s, Not used keys=%s', list(df.keys()),
                  not_used_keys)
     df = df[used_keys]
+
+    # Sampling if data set is too large
+    if args.max_data_size < len(df):
+        df = df.sample(n=args.max_data_size, random_state=11)
+
     # Split Train/Test
     num_train = int(len(df) * (1 - args.test_ratio))
     train_df = df[:num_train]
