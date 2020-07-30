@@ -84,6 +84,7 @@ class RankModelRunner(LocalRunner):
                  timeout=5,
                  number=4,
                  repeat=3,
+                 enable_cpu_cache_flush=False,
                  min_repeat_ms=0,
                  cooldown_interval=0.1,
                  check_correctness=False):
@@ -93,6 +94,10 @@ class RankModelRunner(LocalRunner):
         self.models = models
         self.verify_model_accuracy = verify_model_accuracy
         self.model_accuracy = [0, 0, 0]  # (total, valid error, rank error)
+        self.local_runner = LocalRunner(number=number,
+                                        repeat=repeat,
+                                        min_repeat_ms=min_repeat_ms,
+                                        enable_cpu_cache_flush=enable_cpu_cache_flush)
 
     def get_model_acc(self):
         """Get the accuracy of valid and rank models."""
@@ -268,6 +273,7 @@ class ListwiseRankModel(RankModel):
         """Load models."""
         valid_net_file = '{}/valid_model.cbm'.format(model_path)
         rank_net_file = '{}/list_rank_net.cbm'.format(model_path)
+        self.path = model_path
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -287,7 +293,13 @@ class ListwiseRankModel(RankModel):
     def rank_model_forward(self, valids, features):
         """Rank Model Inference."""
         # Larger score is better.
-        scores = self.rank_net.predict(features)
+        try:
+            scores = self.rank_net.predict(features)
+        except Exception as err:
+            sys.stderr.write(str(err))
+            sys.stderr.write('Error at %s' % self.path)
+            assert False
+
 
         # Smaller rank score is better.
         return [-s if v else 1e+5 for v, s in zip(valids, scores)]

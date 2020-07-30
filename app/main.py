@@ -124,7 +124,7 @@ def tune_kernels(tasks,
         # Setup another measure option for final remeasurment.
         remeasure_option = autotvm.measure_option(
             builder=LocalBuilder(),
-            runner=LocalRunner(number=5, repeat=3, min_repeat_ms=1000),
+            runner=measure_option['runner'].local_runner,
         )
 
         # Check if all tasks are covered by the cost model.
@@ -197,8 +197,7 @@ def tune_and_evaluate(mod, params, input_shape, dtype, target, tuning_opt,
     tasks = autotvm.task.extract_from_program(
         mod["main"],
         target=target,
-        params=params,
-        ops=(relay.op.get("nn.conv2d"), ))
+        params=params)
 
     # Run tuning tasks.
     tune_kernels(tasks, **tuning_opt)
@@ -254,6 +253,24 @@ def main():
 
     configs = create_config()
 
+    # Check if the target is for x86.
+    target = tvm.target.create(configs.target)
+    is_x86 = target.id == 'llvm' and target.keys[0] == 'cpu'
+    if not is_x86:
+        measure_option = {
+            'number': 5,
+            'repeat': 1,
+            'min_repeat_ms': 1000,
+            'enable_cpu_cache_flush': False
+        }
+    else:
+        measure_option = {
+            'number': 1,
+            'repeat': 10,
+            'min_repeat_ms': 1,
+            'enable_cpu_cache_flush': True
+        }
+
     # Get the model.
     if configs.gcv:
         mod, params, input_shape = get_gcv_model(configs.gcv)
@@ -280,9 +297,7 @@ def main():
         if not verify_model else LocalBuilder(n_parallel=configs.n_parallel),
         runner=RankModelRunner(models=models,
                                verify_model_accuracy=verify_model,
-                               number=5,
-                               repeat=1,
-                               min_repeat_ms=1000),
+                               **measure_option)
     )
     tuning_option = {
         'log_filename': 'tune.log',
@@ -291,7 +306,7 @@ def main():
         'measure_option': measure_option,
     }
 
-    if configs.graph and not configs.target.startswith('llvm'):
+    if configs.graph and not is_x86:
         print('WARNING: Graph tuner supports X86 only')
         configs.graph = False
 
