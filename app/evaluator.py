@@ -1,6 +1,7 @@
 """Customized AutoTVM Builder and Runner for Cost Models."""
 # pylint: disable=ungrouped-imports
 
+from concurrent.futures import ProcessPoolExecutor
 import os
 import sys
 import time
@@ -12,7 +13,10 @@ import scipy.stats as ss
 from mxnet import gluon, npx
 from sklearn.metrics import ndcg_score
 
-import catboost
+try:
+    import catboost
+except:
+    import imp
 from perf_model.data_proc import extract_feature
 from tvm.autotvm.measure import LocalRunner, MeasureErrorNo, MeasureResult
 from tvm.autotvm.measure.measure import Builder
@@ -138,6 +142,20 @@ class RankModelRunner(LocalRunner):
                         val = (feat_dict[name] - meta[0]) / meta[1]
                     else:
                         val = meta.index(str(feat_dict[name]))
+                else:
+                    # It happens when this parameter is missing in this config.
+                    # For example, "unroll_kw" only appears at the conv2d.x86
+                    # with kernel size 1x1.
+                    if feat_type == 'numeric':
+                        val = 0
+                    else:
+                        if 'None' not in meta:
+                            # Meaning that training data does not cover a config
+                            # without this parameter. The prediction result
+                            # may not be accurate.
+                            val = 0
+                        else:
+                            val = meta.index('None')
                 feat.append(val)
                 if used:
                     used_feat.append(val)
@@ -269,11 +287,14 @@ class PairwiseRankModel(RankModel):
 
 class ListwiseRankModel(RankModel):
     """A Elementwise Ranking Model with A Valid Model."""
+
     def load_models(self, model_path):
         """Load models."""
         valid_net_file = '{}/valid_model.cbm'.format(model_path)
-        rank_net_file = '{}/list_rank_net.cbm'.format(model_path)
+        rank_net_cbm = '{}/list_rank_net.cbm'.format(model_path)
+        rank_net_py = '{}/list_rank_net.py'.format(model_path)
         self.path = model_path
+        self.is_cbm_model = True
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -281,7 +302,14 @@ class ListwiseRankModel(RankModel):
                 self.valid_net = catboost.CatBoostClassifier().load_model(valid_net_file)
             else:
                 self.valid_net = None
-            self.rank_net = catboost.CatBoost().load_model(rank_net_file)
+
+            try:
+                self.rank_net = catboost.CatBoost().load_model(rank_net_cbm)
+            except NameError: # CatBoost is unavailable. Try to load Python model.
+                self.is_cbm_model = False
+                with open(rank_net_py, 'rb') as fp:
+                    self.rank_net = imp.load_module(model_path.replace('/', '_').replace('.', '_'),
+                            fp, 'list_rank_net.py', ('.py', 'rb', imp.PY_SOURCE))
 
     def valid_model_forward(self, features):
         """Valid Model Inference."""
@@ -294,7 +322,11 @@ class ListwiseRankModel(RankModel):
         """Rank Model Inference."""
         # Larger score is better.
         try:
-            scores = self.rank_net.predict(features)
+            if self.is_cbm_model:
+                scores = self.rank_net.predict(features)
+            else:
+                with ProcessPoolExecutor(max_workers=8) as pool:
+                    scores = list(pool.map(self.rank_net.apply_catboost_model, features))
         except Exception as err:
             sys.stderr.write(str(err))
             sys.stderr.write('Error at %s' % self.path)

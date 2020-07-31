@@ -646,6 +646,7 @@ def train_ranking_catboost(args, train_df, test_df):
     test_ndcg_score = ndcg_score(y_true=test_gt_scores, y_score=predict_result)
     logging.info('Test NDCG={}'.format(test_ndcg_score))
     model.save_model(os.path.join(args.out_dir, 'list_rank_net.cbm'))
+    model.save_model(os.path.join(args.out_dir, 'list_rank_net', format='python'))
 
 
 def main():
