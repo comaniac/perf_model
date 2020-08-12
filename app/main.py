@@ -7,20 +7,22 @@ import os
 import re
 import sys
 import time
+import logging
 
 import numpy as np
 
 import tvm
 import tvm.contrib.graph_runtime as runtime
-from evaluator import (DummyBuilder, ListwiseRankModel, RankModelRunner,
-                       PairwiseRankModel, rank_progress)
+from evaluator import (DummyBuilder, ListwiseRankModel, PairwiseRankModel,
+                       RankModelRunner, rank_progress)
 from round_tuner import RoundTuner
 from tvm import autotvm, relay
 from tvm.autotvm.graph_tuner import DPTuner, PBQPTuner
 from tvm.autotvm.measure import MeasureInput, create_measure_batch
-from tvm.autotvm.measure.measure_methods import LocalBuilder, LocalRunner
+from tvm.autotvm.measure.measure_methods import LocalBuilder
 from tvm.autotvm.tuner import GATuner, GridSearchTuner, RandomTuner, XGBTuner
 from tvm.relay import testing
+from tvm.relay.backend import compile_engine
 
 
 def create_config():
@@ -46,11 +48,13 @@ def create_config():
                         default=8,
                         help='The batch size for config evaluation')
     parser.add_argument('--graph',
-                        default=False,
+                        action='store_true',
                         help='Enable graph tuning (X86 only)')
 
     model_group = parser.add_mutually_exclusive_group(required=True)
-    model_group.add_argument('--gcv', help='Model name in Gluon CV model zoo')
+    model_group.add_argument('--gcv', help='model name in gluon cv model zoo')
+    model_group.add_argument('--tf', help='TensorFlow model')
+    model_group.add_argument('--pt', help='PyTorch model')
     model_group.add_argument('--test', help='Model name in Relay testing')
 
     return parser.parse_args()
@@ -112,7 +116,44 @@ def get_gcv_model(model_name):
     return mod, params, shape
 
 
+def get_tf_model(model_path):
+    """Load a TF model from a file."""
+    from tvm.relay.frontend.tensorflow_parser import TFParser
+
+    print('Loading TF model from file...')
+    #data_name = 'Placeholder'
+    shape = ('Placeholder', (1, 224, 224, 3))
+    logging.getLogger().disabled = True
+    net = TFParser(model_path).parse()
+    ret = relay.frontend.from_tensorflow(net,
+                                         layout='NCHW',
+                                         shape={shape[0]: shape[1]})
+    logging.getLogger().disabled = False
+    return ret[0], ret[1], shape
+
+
+def get_pt_model(model_name):
+    """Pull a PyTorch model from Torch Vision."""
+    import torch
+    import torchvision
+
+    print('Pull the model from Torch Vision...')
+    shape = (1, 3, 224, 224)
+    if model_name.find('inception') != -1:
+        shape = (1, 3, 299, 299)
+
+    model = getattr(torchvision.models, model_name)(pretrained=True)
+    logging.basicConfig(level=logging.CRITICAL)
+    model = model.eval()
+
+    trace = torch.jit.trace(model, torch.randn(shape)).float().eval()
+    logging.basicConfig(level=logging.WARNING)
+    ret = relay.frontend.from_pytorch(trace, [('img', shape)])
+    return ret[0], ret[1], ('img', shape)
+
+
 def tune_kernels(tasks,
+                 gen_graph_tuner_candidates,
                  measure_option,
                  tuner='random',
                  early_stopping=None,
@@ -131,8 +172,7 @@ def tune_kernels(tasks,
         assert isinstance(measure_option['runner'], RankModelRunner)
         for task in tasks:
             if task.name not in measure_option['runner'].models:
-                raise RuntimeError('Task %s is not covered by cost models' %
-                                   task.name)
+                raise RuntimeError('Task %s is not covered by cost models' % task.name)
 
     for i, task in enumerate(tasks):
         prefix = "[Task %2d/%2d] " % (i + 1, len(tasks))
@@ -142,9 +182,11 @@ def tune_kernels(tasks,
 
         # create tuner
         if tuner == 'round':
-            tuner_obj = RoundTuner(task, n_cfg=8)
-            callbacks = [rank_progress(n_trial, prefix=prefix)
-                         ]  # Use different callbacks.
+            if gen_graph_tuner_candidates:
+                tuner_obj = RoundTuner(task, n_cfg=2, n_layout=20)
+            else:
+                tuner_obj = RoundTuner(task, n_cfg=8)
+            callbacks = [rank_progress(n_trial, prefix=prefix)]  # Use different callbacks.
         else:
             if tuner in ('xgb', 'xgb-rank'):
                 tuner_obj = XGBTuner(task, loss_type='rank')
@@ -177,70 +219,64 @@ def tune_kernels(tasks,
             inputs = [
                 MeasureInput(task.target, task, config) for config in top_cfgs
             ]
-            sys.stdout.write('{} Measure Top 8 Configs'.format(prefix))
+            sys.stderr.write('{} Measure Top {} Configs'.format(prefix, len(inputs)))
             results = measure_batch(inputs)
 
             best_flops = max([
                 i.task.flop / np.mean(r.costs) / 1e9 if r.error_no == 0 else 0
                 for i, r in zip(inputs, results)
             ])
-            sys.stdout.write(' | Best %.2f GFLOPS | %.2fs\n' %
-                             (best_flops, time.time() - tic))
+            sys.stderr.write(' | Best %.2f GFLOPS | %.2fs\n' % (best_flops, time.time() - tic))
             autotvm.callback.log_to_file(log_filename)(None, inputs, results)
+
 
 
 def tune_and_evaluate(mod, params, input_shape, dtype, target, tuning_opt,
                       graph_log_file):
     """Tune a model with the ranking model and evaluate the performance."""
 
-    print("Extract conv2d tasks...")
-    tasks = autotvm.task.extract_from_program(
-        mod["main"],
-        target=target,
-        params=params)
+    sys.stderr.write("Extract conv2d tasks...\n")
+    tasks = autotvm.task.extract_from_program(mod["main"], target=target, params=params)
 
     # Run tuning tasks.
-    tune_kernels(tasks, **tuning_opt)
-    if graph_log_file is not None:
-        tune_graph(mod["main"], input_shape, target,
-                   tuning_opt['log_filename'], graph_log_file)
+    tune_kernels(tasks, True, **tuning_opt)
+    if graph_log_file is not None and not os.path.exists(graph_log_file):
+        tune_graph(mod["main"], input_shape, target, tuning_opt['log_filename'], graph_log_file)
 
     dispatch_ctx = tvm.autotvm.task.DispatchContext.current
-    if graph_log_file is not None:
-        tvm.autotvm.task.DispatchContext.current = autotvm.apply_graph_best(
-            graph_log_file)
-    else:
+
+    if graph_log_file is not None and os.path.exists(graph_log_file):
+        sys.stderr.write("Compile model with graph tuning...\n")
+        tvm.autotvm.task.DispatchContext.current = autotvm.apply_graph_best(graph_log_file)
+    elif os.path.exists(tuning_opt['log_filename']):
+        sys.stderr.write("Compile model without graph tuning...\n")
         tvm.autotvm.task.DispatchContext.current = autotvm.apply_history_best(
             tuning_opt['log_filename'])
+    else:
+        sys.stderr.write("Compile model with fallback + tophub...\n")
 
-    print("Compile...")
     with relay.build_config(opt_level=3):
-        graph, lib, params = relay.build_module.build(mod,
-                                                      target=target,
-                                                      params=params)
+        graph, lib, params = relay.build_module.build(mod, target=target, params=params)
     tvm.autotvm.task.DispatchContext.current = dispatch_ctx
 
     # Load parameters.
     ctx = tvm.context(str(target), 0)
     module = runtime.create(graph, lib, ctx)
-    data_tvm = tvm.nd.array(
-        (np.random.uniform(size=input_shape)).astype(dtype))
+    data_tvm = tvm.nd.array((np.random.uniform(size=input_shape)).astype(dtype))
     module.set_input('data', data_tvm)
     module.set_input(**params)
 
     # Evaluate performance.
-    print("Evaluate inference time cost...")
-    ftimer = module.module.time_evaluator("run", ctx, number=3, repeat=100)
+    sys.stderr.write("Evaluate inference time cost...\n")
+    ftimer = module.module.time_evaluator("run", ctx, number=3, repeat=10)
     prof_res = np.array(ftimer().results) * 1000  # convert to millisecond
-    print("Mean inference time (std dev): %.2f ms (%.2f ms)" %
-          (np.mean(prof_res), np.std(prof_res)))
+    sys.stderr.write("Mean inference time (std dev): %.2f ms (%.2f ms)\n" %
+                        (np.mean(prof_res), np.std(prof_res)))
 
 
 def tune_graph(graph, dshape, target, records, opt_sch_file, use_dp=True):
     """Use graph tuner to minimize layout transform on CPU."""
-    target_op = [
-        relay.op.get("nn.conv2d"),
-    ]
+    target_op = [relay.op.get("nn.conv2d"),]
     Tuner = DPTuner if use_dp else PBQPTuner
     executor = Tuner(graph, {'data': dshape}, records, target_op, target)
     executor.benchmark_layout_transform(min_exec_num=2000)
@@ -255,7 +291,7 @@ def main():
 
     # Check if the target is for x86.
     target = tvm.target.create(configs.target)
-    is_x86 = target.id == 'llvm' and target.keys[0] == 'cpu'
+    is_x86 = target.kind.name == 'llvm' and target.keys[0] == 'cpu'
     if not is_x86:
         measure_option = {
             'number': 5,
@@ -274,6 +310,10 @@ def main():
     # Get the model.
     if configs.gcv:
         mod, params, input_shape = get_gcv_model(configs.gcv)
+    elif configs.tf:
+        mod, params, input_shape = get_tf_model(configs.tf)
+    elif configs.pt:
+        mod, params, input_shape = get_pt_model(configs.pt)
     else:
         mod, params, input_shape = get_relay_test_model(configs.test)
 
@@ -297,8 +337,7 @@ def main():
         if not verify_model else LocalBuilder(n_parallel=configs.n_parallel),
         runner=RankModelRunner(models=models,
                                verify_model_accuracy=verify_model,
-                               **measure_option)
-    )
+                               **measure_option))
     tuning_option = {
         'log_filename': 'tune.log',
         'tuner': 'round',
@@ -307,7 +346,7 @@ def main():
     }
 
     if configs.graph and not is_x86:
-        print('WARNING: Graph tuner supports X86 only')
+        sys.stderr.write('WARNING: Graph tuner supports X86 only\n')
         configs.graph = False
 
     graph_log_file = 'graph.log' if configs.graph else None
@@ -316,7 +355,7 @@ def main():
 
     if verify_model:
         valid, rank = measure_option['runner'].get_model_acc()
-        print('\nModel accuracy: Valid %.2f%%; NDCG %.3f' % (valid * 100.0, rank))
+        sys.stderr.write('\nModel accuracy: Valid %.2f%%; NDCG %.3f\n' % (valid * 100.0, rank))
 
 
 if __name__ == "__main__":

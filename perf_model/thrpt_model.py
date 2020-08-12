@@ -3,20 +3,17 @@
 import argparse
 import logging
 import os
-import tqdm
-import sys
-import pickle
-from math import ceil
 
 import matplotlib.pyplot as plt
 import mxnet as mx
 import numpy as np
 import pandas as pd
+import tqdm
 from mxnet import gluon
 from mxnet.gluon import nn
 from sklearn.metrics import ndcg_score
 
-from util import analyze_valid_threshold, logging_config, parse_ctx, set_seed, grad_global_norm
+from util import analyze_valid_threshold, grad_global_norm, logging_config, parse_ctx, set_seed
 
 mx.npx.set_np()
 
@@ -158,8 +155,7 @@ def get_data(args):
         if df[key].to_numpy().std() == 0:
             not_used_keys.append(key)
             continue
-        else:
-            used_keys.append(key)
+        used_keys.append(key)
     logging.info('Original keys=%s, Not used keys=%s', list(df.keys()),
                  not_used_keys)
     df = df[used_keys]
@@ -644,7 +640,7 @@ def train_ranking_catboost(args, train_df, test_df):
         (len(test_features) * args.sample_mult, args.group_size))
     np.save(os.path.join(args.out_dir, 'test_predictions.npy'), predict_result)
     test_ndcg_score = ndcg_score(y_true=test_gt_scores, y_score=predict_result)
-    logging.info('Test NDCG={}'.format(test_ndcg_score))
+    logging.info('Test NDCG=%f', test_ndcg_score)
     model.save_model(os.path.join(args.out_dir, 'list_rank_net.cbm'))
     model.save_model(os.path.join(args.out_dir, 'list_rank_net', format='python'))
 

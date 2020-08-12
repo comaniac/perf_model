@@ -15,7 +15,7 @@ from sklearn.metrics import ndcg_score
 
 try:
     import catboost
-except:
+except Exception:  # pylint: disable=broad-except
     import imp
 from perf_model.data_proc import extract_feature
 from tvm.autotvm.measure import LocalRunner, MeasureErrorNo, MeasureResult
@@ -307,9 +307,10 @@ class ListwiseRankModel(RankModel):
                 self.rank_net = catboost.CatBoost().load_model(rank_net_cbm)
             except NameError: # CatBoost is unavailable. Try to load Python model.
                 self.is_cbm_model = False
-                with open(rank_net_py, 'rb') as fp:
-                    self.rank_net = imp.load_module(model_path.replace('/', '_').replace('.', '_'),
-                            fp, 'list_rank_net.py', ('.py', 'rb', imp.PY_SOURCE))
+                with open(rank_net_py, 'rb') as filep:
+                    self.rank_net = imp.load_module(
+                        model_path.replace('/', '_').replace('.', '_'), filep,
+                        'list_rank_net.py', ('.py', 'rb', imp.PY_SOURCE))
 
     def valid_model_forward(self, features):
         """Valid Model Inference."""
@@ -327,7 +328,7 @@ class ListwiseRankModel(RankModel):
             else:
                 with ProcessPoolExecutor(max_workers=8) as pool:
                     scores = list(pool.map(self.rank_net.apply_catboost_model, features))
-        except Exception as err:
+        except Exception as err:  # pylint: disable=broad-except
             sys.stderr.write(str(err))
             sys.stderr.write('Error at %s' % self.path)
             assert False

@@ -11,7 +11,7 @@ import numpy as np
 import tqdm
 from filelock import FileLock
 
-import topi  # pylint: disable=unused-import
+from tvm import topi # pylint: disable=unused-import
 from tvm.autotvm.record import load_from_file
 from tvm.autotvm.task import create
 from tvm.autotvm.task.space import (AnnotateEntity, OtherOptionEntity,

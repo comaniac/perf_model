@@ -45,7 +45,7 @@ for inp, res in load_from_file(best_config_log):
 
 print('{} / {} missed'.format(missed, total))
 
-for idx, (target_wkl, (target_cfg_str, _, log_files)) in enumerate(wkl_to_log_file.items()):
+for idx, (target_wkl, (target_cfg_str, target_cost, log_files)) in enumerate(wkl_to_log_file.items()):
     if not log_files:
         continue
 
@@ -56,7 +56,16 @@ for idx, (target_wkl, (target_cfg_str, _, log_files)) in enumerate(wkl_to_log_fi
     all_records = sorted(all_records, key=lambda p: np.mean(p[1].costs))
 
     # Find the real rank of the target config.
+    found = False
     for rank, record in enumerate(all_records):
         if target_cfg_str == str(record[0].config):
+            found = True
             print('{}\t{}\t{}'.format(record[0].task.name, rank, len(all_records)))
             break
+        elif target_cost < np.mean(record[1].costs):
+            found = True
+            print('{}\t{}*\t{}'.format(record[0].task.name, rank, len(all_records)))
+            break
+    if not found:
+        print('{}\t{}\t{}'.format(record[0].task.name, -1, len(all_records)))
+
