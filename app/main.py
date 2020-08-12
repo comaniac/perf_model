@@ -93,7 +93,7 @@ def get_relay_test_model(name):
     else:
         raise ValueError("Unsupported network: " + name)
 
-    return mod, params, input_shape
+    return mod, params, ('data', input_shape)
 
 
 def get_gcv_model(model_name):
@@ -113,7 +113,7 @@ def get_gcv_model(model_name):
         shape = (1, 3, size, size)
     net = gcv.model_zoo.get_model(model_name, pretrained=True)
     mod, params = relay.frontend.from_mxnet(net, shape={'data': shape})
-    return mod, params, shape
+    return mod, params, ('data', shape)
 
 
 def get_tf_model(model_path):
@@ -167,18 +167,17 @@ def tune_kernels(tasks,
             builder=LocalBuilder(),
             runner=measure_option['runner'].local_runner,
         )
-
-        # Check if all tasks are covered by the cost model.
         assert isinstance(measure_option['runner'], RankModelRunner)
-        for task in tasks:
-            if task.name not in measure_option['runner'].models:
-                raise RuntimeError('Task %s is not covered by cost models' % task.name)
 
     for i, task in enumerate(tasks):
         prefix = "[Task %2d/%2d] " % (i + 1, len(tasks))
         n_trial = 5000  #len(task.config_space)
 
         callbacks = []
+
+        if task.name not in measure_option['runner'].models:
+            print('not covered by cost models')
+            continue
 
         # create tuner
         if tuner == 'round':
@@ -241,7 +240,7 @@ def tune_and_evaluate(mod, params, input_shape, dtype, target, tuning_opt,
     # Run tuning tasks.
     tune_kernels(tasks, True, **tuning_opt)
     if graph_log_file is not None and not os.path.exists(graph_log_file):
-        tune_graph(mod["main"], input_shape, target, tuning_opt['log_filename'], graph_log_file)
+        tune_graph(mod["main"], input_shape[1], target, tuning_opt['log_filename'], graph_log_file)
 
     dispatch_ctx = tvm.autotvm.task.DispatchContext.current
 
@@ -262,8 +261,8 @@ def tune_and_evaluate(mod, params, input_shape, dtype, target, tuning_opt,
     # Load parameters.
     ctx = tvm.context(str(target), 0)
     module = runtime.create(graph, lib, ctx)
-    data_tvm = tvm.nd.array((np.random.uniform(size=input_shape)).astype(dtype))
-    module.set_input('data', data_tvm)
+    data_tvm = tvm.nd.array((np.random.uniform(size=input_shape[1])).astype(dtype))
+    module.set_input(input_shape[0], data_tvm)
     module.set_input(**params)
 
     # Evaluate performance.
