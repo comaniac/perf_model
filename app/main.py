@@ -121,14 +121,14 @@ def get_tf_model(model_path):
     from tvm.relay.frontend.tensorflow_parser import TFParser
 
     print('Loading TF model from file...')
-    #data_name = 'Placeholder'
-    shape = ('Placeholder', (1, 224, 224, 3))
-    logging.getLogger().disabled = True
+    model_path, name, image_size = model_path.split(':')
+    shape = (1, int(image_size), int(image_size), 3)
+    logging.basicConfig(level=logging.CRITICAL)
     net = TFParser(model_path).parse()
     ret = relay.frontend.from_tensorflow(net,
                                          layout='NCHW',
-                                         shape={shape[0]: shape[1]})
-    logging.getLogger().disabled = False
+                                         shape={name: shape})
+    logging.basicConfig(level=logging.WARNING)
     return ret[0], ret[1], shape
 
 
