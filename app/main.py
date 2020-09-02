@@ -178,10 +178,7 @@ def tune_kernels(tasks,
 
         # create tuner
         if tuner == 'round':
-            if gen_graph_tuner_candidates:
-                tuner_obj = RoundTuner(task, n_cfg=measure_top_n, n_layout=20)
-            else:
-                tuner_obj = RoundTuner(task, n_cfg=measure_top_n)
+            tuner_obj = RoundTuner(task, n_cfg=measure_top_n)
             callbacks = [rank_progress(n_trial, prefix=prefix)]  # Use different callbacks.
         else:
             if tuner in ('xgb', 'xgb-rank'):
@@ -210,7 +207,8 @@ def tune_kernels(tasks,
 
         # Round tuner needs an extra measurement step to get the real throughputs.
         if tuner == 'round':
-            top_cfgs = tuner_obj.get_top_rank_cfgs()
+            max_n_layout = 20 if gen_graph_tuner_candidates else 1
+            top_cfgs = tuner_obj.get_top_rank_cfgs(max_n_layout)
             measure_batch = create_measure_batch(task, remeasure_option)
             inputs = [
                 MeasureInput(task.target, task, config) for config in top_cfgs
