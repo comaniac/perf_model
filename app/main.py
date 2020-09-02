@@ -13,8 +13,7 @@ import numpy as np
 
 import tvm
 import tvm.contrib.graph_runtime as runtime
-from evaluator import (DummyBuilder, ListwiseRankModel, PairwiseRankModel,
-                       RankModelRunner, rank_progress)
+from evaluator import DummyBuilder, ListwiseRankModel, RankModelRunner, rank_progress
 from round_tuner import RoundTuner
 from tvm import autotvm, relay
 from tvm.autotvm.graph_tuner import DPTuner, PBQPTuner
@@ -29,13 +28,6 @@ def create_config():
     """Create the config parser of this app."""
     parser = argparse.ArgumentParser(description='Tune Model with Cost Model')
     parser.add_argument(
-        '--pair-net',
-        default=None,
-        help='The directory of trained pairwise ranking models.'
-        'Model directory should be organized as: '
-        'target-models/task-name/{valid_net.*, embed_net.*, rank_score_net.*, feature.meta}'
-    )
-    parser.add_argument(
         '--list-net',
         default=None,
         help='The directory of trained listwise ranking models.'
@@ -47,6 +39,10 @@ def create_config():
                         type=int,
                         default=8,
                         help='The batch size for config evaluation')
+    parser.add_argument('--measure-top-n',
+                        type=int,
+                        default=32,
+                        help='Number of top configs to be measured')
     parser.add_argument('--graph',
                         action='store_true',
                         help='Enable graph tuning (X86 only)')
@@ -154,6 +150,7 @@ def get_pt_model(model_name):
 
 def tune_kernels(tasks,
                  gen_graph_tuner_candidates,
+                 measure_top_n,
                  measure_option,
                  tuner='random',
                  early_stopping=None,
@@ -182,9 +179,9 @@ def tune_kernels(tasks,
         # create tuner
         if tuner == 'round':
             if gen_graph_tuner_candidates:
-                tuner_obj = RoundTuner(task, n_cfg=2, n_layout=20)
+                tuner_obj = RoundTuner(task, n_cfg=measure_top_n, n_layout=20)
             else:
-                tuner_obj = RoundTuner(task, n_cfg=8)
+                tuner_obj = RoundTuner(task, n_cfg=measure_top_n)
             callbacks = [rank_progress(n_trial, prefix=prefix)]  # Use different callbacks.
         else:
             if tuner in ('xgb', 'xgb-rank'):
@@ -221,16 +218,18 @@ def tune_kernels(tasks,
             sys.stderr.write('{} Measure Top {} Configs'.format(prefix, len(inputs)))
             results = measure_batch(inputs)
 
-            best_flops = max([
-                i.task.flop / np.mean(r.costs) / 1e9 if r.error_no == 0 else 0
-                for i, r in zip(inputs, results)
-            ])
-            sys.stderr.write(' | Best %.2f GFLOPS | %.2fs\n' % (best_flops, time.time() - tic))
+            best_idx, best_flops = max([
+                (idx, i.task.flop / np.mean(r.costs) / 1e9 if r.error_no == 0 else 0)
+                for idx, (i, r) in enumerate(zip(inputs, results))
+            ], key=lambda x: x[1])
+
+            sys.stderr.write(' | Best %.2f GFLOPS at Top %d | %.2fs\n' %
+                             (best_flops, best_idx, time.time() - tic))
             autotvm.callback.log_to_file(log_filename)(None, inputs, results)
 
 
 
-def tune_and_evaluate(mod, params, input_shape, dtype, target, tuning_opt,
+def tune_and_evaluate(mod, params, input_shape, dtype, measure_top_n, target, tuning_opt,
                       graph_log_file):
     """Tune a model with the ranking model and evaluate the performance."""
 
@@ -238,9 +237,11 @@ def tune_and_evaluate(mod, params, input_shape, dtype, target, tuning_opt,
     tasks = autotvm.task.extract_from_program(mod["main"], target=target, params=params)
 
     # Run tuning tasks.
-    tune_kernels(tasks, True, **tuning_opt)
     if graph_log_file is not None and not os.path.exists(graph_log_file):
+        tune_kernels(tasks, True, measure_top_n, **tuning_opt)
         tune_graph(mod["main"], input_shape[1], target, tuning_opt['log_filename'], graph_log_file)
+    else:
+        tune_kernels(tasks, False, measure_top_n, **tuning_opt)
 
     dispatch_ctx = tvm.autotvm.task.DispatchContext.current
 
@@ -267,10 +268,9 @@ def tune_and_evaluate(mod, params, input_shape, dtype, target, tuning_opt,
 
     # Evaluate performance.
     sys.stderr.write("Evaluate inference time cost...\n")
-    ftimer = module.module.time_evaluator("run", ctx, number=3, repeat=10)
+    ftimer = module.module.time_evaluator("run", ctx, number=100, repeat=3)
     prof_res = np.array(ftimer().results) * 1000  # convert to millisecond
-    sys.stderr.write("Mean inference time (std dev): %.2f ms (%.2f ms)\n" %
-                        (np.mean(prof_res), np.std(prof_res)))
+    sys.stderr.write("Median inference time: %.2f ms\n" % np.median(prof_res))
 
 
 def tune_graph(graph, dshape, target, records, opt_sch_file, use_dp=True):
@@ -319,13 +319,7 @@ def main():
     # Map from task name to model.
     verify_model = False
     models = {}
-    if configs.pair_net is not None:
-        for model_path in glob.glob('{}/*'.format(configs.pair_net)):
-            task_name = os.path.basename(model_path)
-            models[task_name] = PairwiseRankModel(task_name, model_path)
-            print('Loaded cost model for %s' % task_name)
-    else:
-        assert configs.list_net is not None
+    if configs.list_net is not None:
         for model_path in glob.glob('{}/*'.format(configs.list_net)):
             task_name = os.path.basename(model_path)
             models[task_name] = ListwiseRankModel(task_name, model_path)
@@ -349,8 +343,9 @@ def main():
         configs.graph = False
 
     graph_log_file = 'graph.log' if configs.graph else None
-    tune_and_evaluate(mod, params, input_shape, 'float32', configs.target,
-                      tuning_option, graph_log_file)
+    tune_and_evaluate(mod, params, input_shape, 'float32',
+                      configs.measure_top_n, configs.target, tuning_option,
+                      graph_log_file)
 
     if verify_model:
         valid, rank = measure_option['runner'].get_model_acc()

@@ -75,7 +75,9 @@ class BestRecordByLayout:
         """Sort the record (of any layout) to be a list."""
 
         # Sort layouts by the best config.
-        sorted_layouts = sorted(self._data.values(), key=lambda h: max(h, key=lambda p: -p[0][0]), reverse=True)
+        sorted_layouts = sorted(self._data.values(),
+                                key=lambda h: max(h, key=lambda p: -p[0][0]),
+                                reverse=True)
         if len(sorted_layouts) > self.max_n_layout:
             sorted_layouts = sorted_layouts[:self.max_n_layout]
 

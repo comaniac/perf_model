@@ -48,6 +48,10 @@ print('{} / {} missed'.format(missed, total))
 for idx, (target_wkl, (target_cfg_str, target_cost, log_files)) in enumerate(wkl_to_log_file.items()):
     if not log_files:
         continue
+    task = target_wkl.to_task()
+    space_size = np.product([len(v.entities) for v in task.config_space.space_map.values()])
+    display_name = '{} {}'.format(task.name, task.args[0][1])
+    display_cost = target_cost * 1e6
 
     # Load and sort all configs.
     all_records = []
@@ -60,12 +64,13 @@ for idx, (target_wkl, (target_cfg_str, target_cost, log_files)) in enumerate(wkl
     for rank, record in enumerate(all_records):
         if target_cfg_str == str(record[0].config):
             found = True
-            print('{}\t{}\t{}'.format(record[0].task.name, rank, len(all_records)))
+            print('{:40s}\t{:7f}\t{:5d}\t{:5d}\t{:10d}'.format(display_name, display_cost, rank, len(all_records), space_size))
             break
         elif target_cost < np.mean(record[1].costs):
             found = True
-            print('{}\t{}*\t{}'.format(record[0].task.name, rank, len(all_records)))
+            print('{:40s}\t{:7f}\t{:5d} *\t{:5d}\t{:10d}\t{:.2f}'.format(
+                display_name, display_cost, rank, len(all_records), space_size, 100.0 * len(all_records) / space_size))
             break
     if not found:
-        print('{}\t{}\t{}'.format(record[0].task.name, -1, len(all_records)))
+        print('{:40s}\t{:7f}\t{:5d}\t{:5d}\t{}'.format(display_name, display_cost, -1, len(all_records), log_files))
 

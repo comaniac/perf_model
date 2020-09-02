@@ -3,6 +3,8 @@
 import argparse
 import logging
 import os
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor
 
 import matplotlib.pyplot as plt
 import mxnet as mx
@@ -161,8 +163,8 @@ def get_data(args):
     df = df[used_keys]
 
     # Sampling if data set is too large
-    if args.max_data_size < len(df):
-        df = df.sample(n=args.max_data_size, random_state=11)
+    # if args.max_data_size < len(df):
+    #     df = df.sample(n=args.max_data_size, random_state=11)
 
     # Split Train/Test
     num_train = int(len(df) * (1 - args.test_ratio))
@@ -324,9 +326,7 @@ def train_nn(args, train_df, test_df):
         train_dev_features[shuffle_idx], train_dev_labels[shuffle_idx]
     num_train = train_dev_features.shape[0] - int(
         args.dev_ratio * train_dev_features.shape[0])
-    train_features, train_labels = train_dev_features[:
-                                                      num_train], train_dev_labels[:
-                                                                                   num_train]
+    train_features, train_labels = train_dev_features[:num_train], train_dev_labels[:num_train]
     dev_features, dev_labels = train_dev_features[
         num_train:], train_dev_labels[num_train:]
     test_features, test_labels = get_feature_label(test_df)
@@ -508,25 +508,26 @@ def train_ranking_catboost(args, train_df, test_df):
         train_dev_features[shuffle_idx], train_dev_labels[shuffle_idx]
     num_train = train_dev_features.shape[0] - int(
         args.dev_ratio * train_dev_features.shape[0])
-    train_features, train_labels = train_dev_features[:
-                                                      num_train], train_dev_labels[:
-                                                                                   num_train]
-    dev_features, dev_labels = train_dev_features[
-        num_train:], train_dev_labels[num_train:]
+    train_features, train_labels = train_dev_features[:num_train], train_dev_labels[:num_train]
+    dev_features, dev_labels = train_dev_features[num_train:], train_dev_labels[num_train:]
+
+    total_data_size = len(train_df) + len(test_df)
+    get_sample_size = lambda ratio: \
+        int(min(total_data_size, args.max_data_size) * ratio * args.sample_mult)
+    dev_sample_size = get_sample_size(args.dev_ratio * (1 - args.test_ratio))
+    train_sample_size = get_sample_size((1 - args.dev_ratio) * (1 - args.test_ratio))
+    test_sample_size = get_sample_size(args.test_ratio)
 
     # Generate the training/testing samples for ranking.
     # We divide the samples into multiple bins and will do stratified sampling within each bin.
     sorted_train_ids = np.argsort(train_labels)
-    train_group_ids_list = np.array_split(sorted_train_ids,
-                                          args.num_threshold_bins)
+    train_group_ids_list = np.array_split(sorted_train_ids, args.num_threshold_bins)
 
     sorted_dev_ids = np.argsort(dev_labels)
-    dev_group_ids_list = np.array_split(sorted_dev_ids,
-                                        args.num_threshold_bins)
+    dev_group_ids_list = np.array_split(sorted_dev_ids, args.num_threshold_bins)
 
     sorted_test_ids = np.argsort(test_labels)
-    test_group_ids_list = np.array_split(sorted_test_ids,
-                                         args.num_threshold_bins)
+    test_group_ids_list = np.array_split(sorted_test_ids, args.num_threshold_bins)
 
     train_rank_features = []
     train_rank_labels = []
@@ -543,10 +544,10 @@ def train_ranking_catboost(args, train_df, test_df):
     train_npz_file = os.path.join(args.out_dir, 'train_rank_features.npz')
     dev_npz_file = os.path.join(args.out_dir, 'dev_rank_features.npz')
     test_npz_file = os.path.join(args.out_dir, 'test_rank_features.npz')
-    if os.path.exists(train_npz_file):
+    if os.path.exists(test_npz_file):
         print('Loading features from npz')
+        assert os.path.exists(train_npz_file)
         assert os.path.exists(dev_npz_file)
-        assert os.path.exists(test_npz_file)
 
         npzfile = np.load(train_npz_file)
         train_rank_features = npzfile['train_rank_features']
@@ -563,31 +564,12 @@ def train_ranking_catboost(args, train_df, test_df):
         test_rank_labels = npzfile['test_rank_labels']
         test_groups = npzfile['test_groups']
     else:
-        print('Generate Train Ranking Groups:')
-        for i in tqdm.tqdm(range(len(train_features) * args.sample_mult)):
-            for group_ids in train_group_ids_list:
-                chosen_ids = np.random.choice(group_ids,
-                                              args.group_size //
-                                              args.num_threshold_bins,
-                                              replace=False)
-                train_rank_features.append(train_features[chosen_ids, :])
-                train_rank_labels.append(train_labels[chosen_ids])
-                train_groups.append(np.ones_like(chosen_ids) * i)
-        train_rank_features = np.concatenate(train_rank_features, axis=0)
-        train_rank_labels = np.concatenate(train_rank_labels, axis=0)
-        train_groups = np.concatenate(train_groups, axis=0)
-
-        np.savez(os.path.join(args.out_dir, 'train_rank_features.npz'),
-                 train_rank_features=train_rank_features,
-                 train_rank_labels=train_rank_labels,
-                 train_groups=train_groups)
 
         print('Generate Dev Ranking Groups:')
-        for i in tqdm.tqdm(range(len(dev_features) * args.sample_mult)):
+        for i in tqdm.tqdm(range(dev_sample_size)):
             for group_ids in dev_group_ids_list:
                 chosen_ids = np.random.choice(group_ids,
-                                              args.group_size //
-                                              args.num_threshold_bins,
+                                              args.group_size // args.num_threshold_bins,
                                               replace=False)
                 dev_rank_features.append(dev_features[chosen_ids, :])
                 dev_rank_labels.append(dev_labels[chosen_ids])
@@ -601,13 +583,30 @@ def train_ranking_catboost(args, train_df, test_df):
                  dev_rank_labels=dev_rank_labels,
                  dev_groups=dev_groups)
 
+        print('Generate Train Ranking Groups:')
+        for i in tqdm.tqdm(range(train_sample_size)):
+            for group_ids in train_group_ids_list:
+                chosen_ids = np.random.choice(group_ids,
+                                              args.group_size // args.num_threshold_bins,
+                                              replace=False)
+                train_rank_features.append(train_features[chosen_ids, :])
+                train_rank_labels.append(train_labels[chosen_ids])
+                train_groups.append(np.ones_like(chosen_ids) * i)
+        train_rank_features = np.concatenate(train_rank_features, axis=0)
+        train_rank_labels = np.concatenate(train_rank_labels, axis=0)
+        train_groups = np.concatenate(train_groups, axis=0)
+
+        np.savez(os.path.join(args.out_dir, 'train_rank_features.npz'),
+                 train_rank_features=train_rank_features,
+                 train_rank_labels=train_rank_labels,
+                 train_groups=train_groups)
+
         test_rng = np.random.RandomState(args.test_seed)
         print('Generate Test Ranking Groups:')
-        for i in tqdm.tqdm(range(len(test_features) * args.sample_mult)):
+        for i in tqdm.tqdm(range(test_sample_size)):
             for group_ids in test_group_ids_list:
                 chosen_ids = test_rng.choice(group_ids,
-                                             args.group_size //
-                                             args.num_threshold_bins,
+                                             args.group_size // args.num_threshold_bins,
                                              replace=False)
                 test_rank_features.append(test_features[chosen_ids, :])
                 test_rank_labels.append(test_labels[chosen_ids])
@@ -634,15 +633,13 @@ def train_ranking_catboost(args, train_df, test_df):
     model.fit(train_pool, eval_set=dev_pool)
     predict_result = model.predict(test_rank_features)
 
-    test_gt_scores = test_rank_labels.reshape(
-        len(test_features) * args.sample_mult, args.group_size)
-    predict_result = predict_result.reshape(
-        (len(test_features) * args.sample_mult, args.group_size))
+    test_gt_scores = test_rank_labels.reshape(test_sample_size, args.group_size)
+    predict_result = predict_result.reshape((test_sample_size, args.group_size))
     np.save(os.path.join(args.out_dir, 'test_predictions.npy'), predict_result)
     test_ndcg_score = ndcg_score(y_true=test_gt_scores, y_score=predict_result)
     logging.info('Test NDCG=%f', test_ndcg_score)
     model.save_model(os.path.join(args.out_dir, 'list_rank_net.cbm'))
-    model.save_model(os.path.join(args.out_dir, 'list_rank_net', format='python'))
+    model.save_model(os.path.join(args.out_dir, 'list_rank_net'), format='python')
 
 
 def main():
