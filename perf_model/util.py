@@ -10,11 +10,24 @@ import random
 import pandas as pd
 
 
+def read_pd(path):
+    df = None
+    for reader in [pd.read_csv, pd.read_parquet, pd.read_pickle]:
+        try:
+            df = reader(path)
+            break
+        except Exception:
+            continue
+    if df is None:
+        raise RuntimeError('Cannot load {}'.format(path))
+    return df
+
+
 def analyze_valid_threshold(dataset):
     """Analyze throughputs and determine the invalid threshold."""
     MAX_INVALID_THD = 10
 
-    df = pd.read_csv(dataset)
+    df = read_pd(dataset)
     stats = pd.cut(x=df['thrpt'],
                    include_lowest=True,
                    bins=np.arange(0, ceil(max(df['thrpt'])) + 1, 0.1)).value_counts().sort_index()
@@ -35,7 +48,7 @@ def logging_config(folder: Optional[str] = None,
                    console: bool = True) -> str:
     """Config the logging module"""
     if name is None:
-        name = inspect.stack()[1][1].split('.')[0]
+        name = inspect.stack()[-1][1].split('.')[0]
     if folder is None:
         folder = os.path.join(os.getcwd(), name)
     if not os.path.exists(folder):

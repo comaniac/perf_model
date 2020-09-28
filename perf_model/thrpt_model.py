@@ -3,9 +3,6 @@
 import argparse
 import logging
 import os
-import multiprocessing
-from concurrent.futures import ProcessPoolExecutor
-
 import matplotlib.pyplot as plt
 import mxnet as mx
 import numpy as np
