@@ -26,6 +26,31 @@ def set_seed(seed):
     th.manual_seed(seed)
 
 
+def down_sample_df(df, seed, ratio):
+    """Down sampling data frame by a ratio based on operators.
+
+    Parameters
+    ----------
+    df
+        The input dataset in pandas DataFrame
+    seed
+        The seed to sample
+    ratio
+        The ratio of the remaining dataset
+
+    Returns
+    -------
+    sampled_df
+        The sampled dataframe
+    """
+    rng = np.random.RandomState(seed)
+
+    op_keys = [k for k in df.columns.to_list() if k.find('in_') != -1 or k.find('attr_') != -1]
+    group_dfs = [x for _, x in df.groupby(op_keys)]
+    sampled_dfs = [d.sample(int(len(d) * ratio), random_state=rng) for d in group_dfs]
+    return pd.concat(sampled_dfs)
+
+
 def split_df(df, seed, ratio):
     """Split the input data frame into Train + Valid + Test
 
