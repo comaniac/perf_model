@@ -11,6 +11,7 @@ MODEL_DIR=../model_results/nn_${loss_type}_${rank_lambda}_${iter_mult}
 mkdir -p ${MODEL_DIR}
 python3 -m perf_model.thrpt_model_new \
     --algo nn \
+    --rank_loss_type ${loss_type} \
     --data_prefix ${data_prefix} \
     --rank_lambda ${rank_lambda} \
     --iter_mult ${iter_mult} \

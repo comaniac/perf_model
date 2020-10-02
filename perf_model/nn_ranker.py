@@ -2,6 +2,7 @@ import functools
 import torch as th
 import torch.nn as nn
 import numpy as np
+import logging
 import torch.nn.functional as F
 from torch.distributions.dirichlet import Dirichlet
 from .losses import approxNDCGLoss, listMLE, lambdaLoss
@@ -9,9 +10,11 @@ from .losses import approxNDCGLoss, listMLE, lambdaLoss
 
 def get_activation(act_type):
     if act_type == 'leaky':
-        return nn.LeakyReLU(0.1)
+        return nn.LeakyReLU()
     elif act_type == 'elu':
         return nn.ELU()
+    elif act_type == 'relu':
+        return nn.ReLU()
     else:
         raise NotImplementedError
 
@@ -29,39 +32,128 @@ def get_ranking_loss(loss_type):
         raise NotImplementedError
 
 
+class LinearBlock(nn.Module):
+    def __init__(self, in_units, units, act_type, dropout, use_gate_net=False):
+        super(LinearBlock, self).__init__()
+        self.use_gate_net = use_gate_net
+        self.linear1 = nn.Linear(in_features=in_units,
+                                 out_features=units,
+                                 bias=False)
+        if use_gate_net:
+            logging.info('Use Gate')
+            self.gate_net = nn.Sequential(
+                nn.Linear(in_features=in_units,
+                          out_features=units,
+                          bias=False),
+                nn.Sigmoid())
+        self.bn = nn.BatchNorm1d(units)
+        self.act = get_activation(act_type)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        out = self.linear1(x)
+        out = self.bn(out)
+        out = self.act(out)
+        if self.use_gate_net:
+            gate = self.gate_net(x)
+            out = out * gate
+        out = self.dropout(out)
+        return out
+
+
 class RankingModel(nn.Module):
     def __init__(self, in_units, units=128, num_layers=3,
-                 dropout=0.05, use_bn=True, act_type='leaky'):
+                 dropout=0.05, use_gate=True,
+                 use_residual=False, feature_importance=False,
+                 act_type='leaky'):
         super(RankingModel, self).__init__()
-        layers = []
+        blocks = []
+        self.num_layers = num_layers
+        self.use_residual = use_residual
+        self.feature_importance = feature_importance
+        logging.info('Use Gate={}'.format(use_gate))
+        if self.feature_importance:
+            self.feature_importance_net = \
+                nn.Sequential(
+                    LinearBlock(in_units=in_units,
+                                units=units,
+                                act_type=act_type,
+                                dropout=dropout,
+                                use_gate_net=use_gate),
+                    LinearBlock(in_units=units,
+                                units=units,
+                                act_type=act_type,
+                                dropout=dropout,
+                                use_gate_net=use_gate),
+                    nn.Linear(in_features=units,
+                              out_features=in_units),
+                    nn.Sigmoid()
+                )
         for i in range(num_layers):
-            layers.append(nn.Linear(in_features=in_units,
-                                    out_features=units,
-                                    bias=False))
+            blocks.append(LinearBlock(in_units=in_units,
+                                      units=units,
+                                      act_type=act_type,
+                                      dropout=dropout,
+                                      use_gate_net=use_gate))
             in_units = units
-            if use_bn:
-                layers.append(nn.BatchNorm1d(in_units))
-            layers.append(get_activation(act_type))
-            layers.append(nn.Dropout(dropout))
-        layers.append(nn.Linear(in_features=in_units,
-                                out_features=1,
-                                bias=True))
-        self.net = nn.Sequential(*layers)
+        self.out_layer = nn.Sequential(
+            nn.Linear(in_features=units,
+                      out_features=1,
+                      bias=True))
+        self.blocks = nn.ModuleList(blocks)
 
     def forward(self, X):
-        """
+        """MLP with residual connection
 
         Parameters
         ----------
         X
-            Shape (batch_size, units)
+            Shape (batch_size, in_units)
 
         Returns
         -------
         scores
             Shape (batch_size,)
         """
-        return self.net(X)[:, 0]
+        if self.feature_importance:
+            feature_importance = self.feature_importance_net(X)
+            X = feature_importance * X
+        data_in = self.blocks[0](X)
+        for i in range(1, self.num_layers):
+            out = self.blocks[i](data_in)
+            if self.use_residual:
+                out = out + data_in
+        out = self.out_layer(out)
+        return out[:, 0]
+
+
+class RegressionSampler:
+    def __init__(self, thrpt, regression_batch_size=2048,
+                 neg_mult=5):
+        self._regression_batch_size = regression_batch_size
+        self._thrpt = thrpt
+        self._neg_mult = neg_mult
+        self._valid_indices = (thrpt > 0).nonzero()[0]
+        self._invalid_indices = (thrpt == 0).nonzero()[0]
+        self._generator = np.random.default_rng()
+
+    def __iter__(self):
+        while True:
+            if self._neg_mult > 0:
+                valid_batch_size = int(np.ceil(self._regression_batch_size / (1 + self._neg_mult)))
+                valid_batch_size = min(valid_batch_size, len(self._valid_indices))
+                invalid_batch_size = self._regression_batch_size - valid_batch_size
+                valid_indices = self._generator.choice(len(self._valid_indices),
+                                                       valid_batch_size,
+                                                       replace=True)
+                invalid_indices = self._generator.choice(len(self._invalid_indices),
+                                                         invalid_batch_size,
+                                                         replace=True)
+                indices = np.hstack([valid_indices, invalid_indices])
+            else:
+                indices = self._generator.choice(len(self._thrpt), self._regression_batch_size,
+                                                 replace=True)
+            yield indices
 
 
 class RankGroupSampler:

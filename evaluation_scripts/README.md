@@ -10,6 +10,9 @@ bash evaluate_e2e.sh g4 cat_ranking cat_ranking
 
 # Evaluate LambdaRank
 bash evaluate_e2e.sh g4 nn_lambda_rank_1.0_120 nn
+
+# Evaluate NoRank
+bash evaluate_e2e.sh g4 nn_lambda_rank_0.0_120 nn
 ```
 
 ## C5

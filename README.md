@@ -4,7 +4,19 @@
 python3 -m pip install torch torchvision
 
 # For M6 instance, you can install via
-python3 -m pip install https://github.com/Lmy0217/PyTorch-aarch64/raw/master/torch-1.6.0a0%2B8d883f5-cp36-cp36m-linux_aarch64.whl 
+python3 -m pip install https://github.com/Lmy0217/PyTorch-aarch64/raw/master/torch-1.6.0a0%2B8d883f5-cp36-cp36m-linux_aarch64.whl
+
+# Install the current package
+python3 -m pip install -U -e . --user 
+```
+
+## Split Performance Dataset for Ablation
+
+```
+python3 -m perf_model.thrpt_model_new --dataset split_tuning_dataset \
+        --subsample \
+        --subsample_ratio 0.7 \
+        --out_dir split_tuning_dataset_0.7
 ```
 
 ## Download the Example Dataset and Pretrained Models
@@ -13,23 +25,26 @@ python3 -m pip install https://github.com/Lmy0217/PyTorch-aarch64/raw/master/tor
 # Download the datasets
 aws s3 cp --recursive s3://hyuz-shared-data/dataset_0726 tuning_dataset
 aws s3 cp --recursive s3://xingjian-public/split_tuning_dataset_20200920 split_tuning_dataset
+aws s3 cp --recursive s3://xingjian-public/lorien/split_tuning_dataset_0.3_20201001 split_tuning_dataset_0.3
+aws s3 cp --recursive s3://xingjian-public/lorien/split_tuning_dataset_0.5_20201001 split_tuning_dataset_0.5
+aws s3 cp --recursive s3://xingjian-public/lorien/split_tuning_dataset_0.7_20201001 split_tuning_dataset_0.7
 
 # The old model
 aws s3 cp --recursive s3://hyuz-shared-data/trained_models trained_models
-
-# Download the catboost models
 aws s3 cp --recursive s3://xingjian-public/lorien/models/cat_regression_20200923/ model_results/cat_regression
 aws s3 cp --recursive s3://xingjian-public/lorien/models/cat_ranking_20200923/ model_results/cat_ranking
 
+
+# Download the catboost models
+aws s3 cp --recursive s3://xingjian-public/lorien/models/cat_regression_5000_split0.5_20201001/ model_results/cat_regression_split0.3
+aws s3 cp --recursive s3://xingjian-public/lorien/models/cat_regression_5000_split0.5_20201001/ model_results/cat_regression_split0.5
+aws s3 cp --recursive s3://xingjian-public/lorien/models/cat_regression_5000_split0.7_20201001/ model_results/cat_regression_split0.7
+aws s3 cp --recursive s3://xingjian-public/lorien/models/cat_regression_5000_split1_20201001/ model_results/cat_regression_split1
+
+
 # Download the NN models
-aws s3 cp --recursive s3://xingjian-public/lorien/models/nn_0.0_40_20200926/ model_results/nn_0.0_40
-aws s3 cp --recursive s3://xingjian-public/lorien/models/nn_0.0_80_20200926/ model_results/nn_0.0_80
-aws s3 cp --recursive s3://xingjian-public/lorien/models/nn_1.0_40_20200926/ model_results/nn_1.0_40
-aws s3 cp --recursive s3://xingjian-public/lorien/models/nn_1.0_80_20200926/ model_results/nn_1.0_80
-aws s3 cp --recursive s3://xingjian-public/lorien/models/nn_1.0_40_hinge_20200926/ model_results/nn_1.0_40_hinge
-aws s3 cp --recursive s3://xingjian-public/lorien/models/nn_1.0_80_hinge_20200926/ model_results/nn_1.0_80_hinge
-aws s3 cp --recursive s3://xingjian-public/lorien/models/nn_1.0_40_approx_ndcg_20200926/ model_results/nn_1.0_40_approx_ndcg
-aws s3 cp --recursive s3://xingjian-public/lorien/models/nn_1.0_80_approx_ndcg_20200926/ model_results/nn_1.0_80_approx_ndcg
+aws s3 cp --recursive s3://xingjian-public/lorien/models/nn_regression_-1_1000_512_3_0.1_1_earlystop_20201001/ model_results/nn_regression_-1_1000_512_3_0.1_1_earlystop
+aws s3 cp --recursive s3://xingjian-public/lorien/models/nn_regression_2_1000_512_3_0.1_1_earlystop_20201001/ model_results/nn_regression_2_1000_512_3_0.1_1_earlystop
 ```
 
 The `split_tuning_dataset` is generated based on the tuning dataset. We can generate the dataset as follows:

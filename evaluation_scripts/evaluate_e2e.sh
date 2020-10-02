@@ -1,7 +1,7 @@
 set -ex
 
 n_parallel=8
-measure_top_n=32
+measure_top_n=8
 instance_type=$1
 model_name=$2
 model_type=$3
@@ -43,12 +43,15 @@ do
                       --n-parallel ${n_parallel} \
                       --measure-top-n ${measure_top_n} \
                       --target "${TARGET}" --gcv ${network} 2>&1 | tee -a ${OUT_DIR}/${network}.txt
- else
-   python3 ../app/main.py --list-net ${MODEL_PATH} \
+    mv tune.log $network.log
+  else
+    python3 ../app/main.py --list-net ${MODEL_PATH} \
                         --model_type ${model_type} \
                         --n-parallel ${n_parallel} \
                         --measure-top-n ${measure_top_n} \
                         --graph \
                         --target "${TARGET}" --gcv ${network} 2>&1 | tee -a ${OUT_DIR}/${network}.txt
- fi
+    mv tune.log $network.log
+    mv graph.log $network_graph.log
+  fi
 done;
