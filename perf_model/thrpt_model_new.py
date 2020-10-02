@@ -55,8 +55,8 @@ def down_sample_df(df, seed, ratio):
     return pd.concat(sampled_dfs)
 
 
-def split_df(df, seed, ratio):
-    """Split the input data frame into Train + Valid + Test
+def split_df_by_op(df, seed, ratio):
+    """Split the input data frame into Train + Test by operators.
 
     Parameters
     ----------
@@ -71,16 +71,23 @@ def split_df(df, seed, ratio):
     -------
     train_df
         The training dataframe
-    val_df
-        The validation dataframe
+    test_df
+        The testing dataframe
     """
     rng = np.random.RandomState(seed)
-    num = int(ratio * len(df))
-    perm = rng.permutation(len(df))
-    train_num = len(df) - num
-    train_df = df.iloc[perm[:train_num]]
-    val_df = df.iloc[perm[train_num:]]
-    return train_df, val_df
+
+    op_keys = [k for k in df.columns.to_list() if k.find('in_') != -1 or k.find('attr_') != -1]
+    if len(op_keys) > 0:
+        group_dfs = [x for _, x in df.groupby(op_keys)]
+    else:
+        group_dfs = [df]
+
+    num = int(ratio * len(group_dfs))
+    perm = rng.permutation(len(group_dfs))
+    train_num = len(group_dfs) - num
+    train_dfs = [group_dfs[i] for i in perm[:train_num]]
+    test_dfs = [group_dfs[i] for i in perm[train_num:]]
+    return pd.concat(train_dfs), pd.concat(test_dfs)
 
 
 def split_train_test_df(df, seed, ratio, top_sample_ratio=0.2, group_size=10, K=4):
