@@ -11,7 +11,10 @@ import matplotlib.pyplot as plt
 import torch as th
 import numpy as np
 import random
-import catboost
+try:
+    import catboost
+except Exception:
+    import imp
 import pandas as pd
 import tqdm
 from torch.utils.data import DataLoader
@@ -73,6 +76,7 @@ def split_df_by_op(df, seed, ratio):
         The training dataframe
     test_df
         The testing dataframe
+    op_keys
     """
     rng = np.random.RandomState(seed)
 
@@ -82,12 +86,17 @@ def split_df_by_op(df, seed, ratio):
     else:
         group_dfs = [df]
 
-    num = int(ratio * len(group_dfs))
+    if len(group_dfs) == 1:
+        return None, None
+    print('ratio=', ratio)
+    print(ratio * len(group_dfs))
+    num = int(np.ceil(ratio * len(group_dfs)))
     perm = rng.permutation(len(group_dfs))
     train_num = len(group_dfs) - num
+    print(f'Training Num: {train_num}, Test Num: {num}')
     train_dfs = [group_dfs[i] for i in perm[:train_num]]
     test_dfs = [group_dfs[i] for i in perm[train_num:]]
-    return pd.concat(train_dfs), pd.concat(test_dfs)
+    return pd.concat(train_dfs), pd.concat(test_dfs), op_keys
 
 
 def split_train_test_df(df, seed, ratio, top_sample_ratio=0.2, group_size=10, K=4):
@@ -231,6 +240,25 @@ def get_feature_label(df):
     features = df[feature_keys].to_numpy()
     labels = df['thrpt'].to_numpy()
     return features, labels
+
+
+def get_group_indices(df):
+    op_keys = [k for k in df.columns.to_list() if k.find('in_') != -1
+               or k.find('attr_') != -1]
+    if len(op_keys) > 0:
+        group_indices = [idx for _, idx in df.groupby(op_keys).groups.items()]
+    else:
+        group_indices = np.arange(len(df))
+    return group_indices
+
+
+def get_group_df(df):
+    op_keys = [k for k in df.columns.to_list() if k.find('in_') != -1 or k.find('attr_') != -1]
+    if len(op_keys) > 0:
+        group_dfs = [x for _, x in df.groupby(op_keys)]
+    else:
+        group_dfs = [df]
+    return group_dfs
 
 
 class CatRegressor:
@@ -426,7 +454,9 @@ class NNRanker:
     def fit(self, train_df, batch_size=256, group_size=10, lr=1E-2,
             iter_mult=500, rank_lambda=1.0, test_df=None, train_dir='.'):
         features, labels = get_feature_label(train_df)
-        split_ratio = 0.1
+        logging.info(f'#Train = {len(train_df)},'
+                     f' #Non-invalid Throughputs in Train = {len((labels >0).nonzero()[0])}')
+        split_ratio = 0.05
         train_num = int(np.ceil((1 - split_ratio) * len(features)))
         perm = np.random.permutation(len(features))
         train_features, train_labels = features[perm[:train_num]], labels[perm[:train_num]]
@@ -435,7 +465,7 @@ class NNRanker:
         if test_df is not None:
             test_features, test_labels = get_feature_label(test_df)
         epoch_iters = (len(features) + batch_size - 1) // batch_size
-        log_interval = epoch_iters * iter_mult // 20
+        log_interval = epoch_iters * iter_mult // 100
         num_iters = epoch_iters * iter_mult
         if self.net is None:
             self._in_units = features.shape[1]
@@ -482,7 +512,7 @@ class NNRanker:
         epoch_iter = 0
         best_valid_rmse = np.inf
         no_better = 0
-        stop_patience = 20
+        stop_patience = 30
         for ranking_features, ranking_labels in dataloader:
             optimizer.zero_grad()
             ranking_features = ranking_features.cuda()
@@ -604,9 +634,15 @@ class NNRanker:
             valid_indices = (labels > 0).nonzero()[0]
             valid_rmse = np.sqrt(np.mean(np.square(preds[valid_indices] - labels[valid_indices])))
             valid_mae = np.mean(np.abs(preds[valid_indices] - labels[valid_indices]))
+            ndcg_top_2 = ndcg_score(np.expand_dims(labels, axis=0),
+                                    np.expand_dims(original_preds, axis=0), k=2)
+            ndcg_top_8 = ndcg_score(np.expand_dims(labels, axis=0),
+                                    np.expand_dims(original_preds, axis=0), k=8)
             return {'rmse': rmse, 'mae': mae,
                     'valid_rmse': valid_rmse, 'valid_mae': valid_mae,
-                    'invalid_acc': np.sum((original_preds <= 0) * (labels <= 0)) / len(preds)}
+                    'invalid_acc': np.sum((original_preds <= 0) * (labels <= 0)) / len(preds),
+                    'ndcg_top_2': ndcg_top_2,
+                    'ndcg_top_8': ndcg_top_8}
         elif mode == 'ranking':
             # We calculate two things, the NDCG score and the MRR score.
             ndcg_val = ndcg_score(y_true=labels, y_score=preds)
@@ -649,6 +685,7 @@ def parse_args():
                         help='When set, it will subsample the input training df.')
     parser.add_argument('--subsample_ratio', default=0.7, type=float,
                         help='The ratio of the subsample')
+    parser.add_argument('--split_test_op_level', action='store_true')
     split_args = parser.add_argument_group('data split arguments')
     split_args.add_argument('--dataset',
                             type=str,
@@ -664,7 +701,7 @@ def parse_args():
                             help='Name of the testing split.')
     split_args.add_argument('--split_rank_test_prefix', default=None,
                             help='Prefix of the rank test datasets.')
-    split_args.add_argument('--split_test_ratio', default=0.1,
+    split_args.add_argument('--split_test_ratio', default=0.1, type=float,
                             help='Ratio of the test set in the split.')
     split_args.add_argument('--split_top_ratio', default=0.0,
                             help='Ratio of the top samples that will be split to the test set.')
@@ -748,6 +785,19 @@ def main():
         if args.save_used_keys:
             with open(args.used_key_path, 'w') as of:
                 json.dump(used_keys, of)
+    elif args.split_test_op_level:
+        df, used_keys = get_data(args.dataset)
+        train_df, test_df, op_keys = split_df_by_op(df, seed=args.seed, ratio=args.split_test_ratio)
+        if train_df is None:
+            logging.info(f'Cannot split {args.dataset}.')
+        train_df.reset_index(drop=True, inplace=True)
+        test_df.reset_index(drop=True, inplace=True)
+        train_df.to_parquet(args.split_train_name)
+        test_df.to_parquet(args.split_test_name)
+        logging.info('  #Train = {}, #Test = {}'.format(len(train_df), len(test_df)))
+        if args.save_used_keys:
+            with open(args.used_key_path, 'w') as of:
+                json.dump(used_keys, of)
     elif args.subsample:
         sample_counts = []
         os.makedirs(args.out_dir, exist_ok=True)
@@ -773,15 +823,20 @@ def main():
     else:
         logging_config(args.out_dir, 'train')
         if args.split_postfix is not None and args.split_postfix != '1':
-            assert 'split_tuning_dataset' in args.data_prefix
-            real_prefix = args.data_prefix.replace('split_tuning_dataset',
-                                                   f'split_tuning_dataset_{args.split_postfix}')
+            if 'split_tuning_dataset_op' in args.data_prefix:
+                real_prefix = args.data_prefix.replace('split_tuning_dataset_op',
+                                                       f'split_tuning_dataset_op_{args.split_postfix}')
+            elif 'split_tuning_dataset' in args.data_prefix:
+                real_prefix = args.data_prefix.replace('split_tuning_dataset',
+                                                       f'split_tuning_dataset_{args.split_postfix}')
+            else:
+                raise NotImplementedError
             train_df = read_pd(real_prefix + '.train.pq')
         else:
             train_df = read_pd(args.data_prefix + '.train.pq')
         test_df = read_pd(args.data_prefix + '.test.pq')
-        rank_test_all = np.load(args.data_prefix + '.rank_test.all.npz')
-        rank_test_valid = np.load(args.data_prefix + '.rank_test.valid.npz')
+        # rank_test_all = np.load(args.data_prefix + '.rank_test.all.npz')
+        # rank_test_valid = np.load(args.data_prefix + '.rank_test.valid.npz')
         with open(args.data_prefix + '.used_key.json', 'r') as in_f:
             used_key = json.load(in_f)
         train_df = train_df[used_key]
@@ -793,16 +848,16 @@ def main():
             model.save(args.out_dir)
             test_features, test_labels = get_feature_label(test_df)
             test_score = model.evaluate(test_features, test_labels, 'regression')
-            test_ranking_score_all = model.evaluate(rank_test_all['rank_features'],
-                                                    rank_test_all['rank_labels'],
-                                                    'ranking')
-            test_ranking_score_all = {k + '_all': v for k, v in test_ranking_score_all.items()}
-            test_ranking_score_valid = model.evaluate(rank_test_valid['rank_features'],
-                                                      rank_test_valid['rank_labels'],
-                                                      'ranking')
-            test_ranking_score_valid = {k + '_valid': v for k, v in test_ranking_score_valid.items()}
-            test_score.update(test_ranking_score_all)
-            test_score.update(test_ranking_score_valid)
+            # test_ranking_score_all = model.evaluate(rank_test_all['rank_features'],
+            #                                         rank_test_all['rank_labels'],
+            #                                         'ranking')
+            # test_ranking_score_all = {k + '_all': v for k, v in test_ranking_score_all.items()}
+            # test_ranking_score_valid = model.evaluate(rank_test_valid['rank_features'],
+            #                                           rank_test_valid['rank_labels'],
+            #                                           'ranking')
+            # test_ranking_score_valid = {k + '_valid': v for k, v in test_ranking_score_valid.items()}
+            # test_score.update(test_ranking_score_all)
+            # test_score.update(test_ranking_score_valid)
             logging.info('Test Score={}'.format(test_score))
             with open(os.path.join(args.out_dir, 'test_scores.json'), 'w') as out_f:
                 json.dump(test_score, out_f)
@@ -811,17 +866,17 @@ def main():
             model.fit(train_df, train_dir=args.out_dir, seed=args.seed, niter=args.niter)
             model.save(args.out_dir)
             test_score = {}
-            test_ranking_score_all = model.evaluate(rank_test_all['rank_features'],
-                                                    rank_test_all['rank_labels'],
-                                                    'ranking')
-            test_ranking_score_all = {k + '_all': v for k, v in test_ranking_score_all.items()}
-            test_ranking_score_valid = model.evaluate(rank_test_valid['rank_features'],
-                                                      rank_test_valid['rank_labels'],
-                                                      'ranking')
-            test_ranking_score_valid = {k + '_valid': v for k, v in
-                                        test_ranking_score_valid.items()}
-            test_score.update(test_ranking_score_all)
-            test_score.update(test_ranking_score_valid)
+            # test_ranking_score_all = model.evaluate(rank_test_all['rank_features'],
+            #                                         rank_test_all['rank_labels'],
+            #                                         'ranking')
+            # test_ranking_score_all = {k + '_all': v for k, v in test_ranking_score_all.items()}
+            # test_ranking_score_valid = model.evaluate(rank_test_valid['rank_features'],
+            #                                           rank_test_valid['rank_labels'],
+            #                                           'ranking')
+            # test_ranking_score_valid = {k + '_valid': v for k, v in
+            #                             test_ranking_score_valid.items()}
+            # test_score.update(test_ranking_score_all)
+            # test_score.update(test_ranking_score_valid)
             logging.info('Test Score={}'.format(test_score))
             with open(os.path.join(args.out_dir, 'test_scores.json'), 'w') as out_f:
                 json.dump(test_score, out_f)
@@ -843,17 +898,17 @@ def main():
             model.save(args.out_dir)
             test_features, test_labels = get_feature_label(test_df)
             test_score = model.evaluate(test_features, test_labels, 'regression')
-            test_ranking_score_all = model.evaluate(rank_test_all['rank_features'],
-                                                    rank_test_all['rank_labels'],
-                                                    'ranking')
-            test_ranking_score_all = {k + '_all': v for k, v in test_ranking_score_all.items()}
-            test_score.update(test_ranking_score_all)
-            test_ranking_score_valid = model.evaluate(rank_test_valid['rank_features'],
-                                                      rank_test_valid['rank_labels'],
-                                                      'ranking')
-            test_ranking_score_valid = {k + '_valid': v for k, v in
-                                        test_ranking_score_valid.items()}
-            test_score.update(test_ranking_score_valid)
+            # test_ranking_score_all = model.evaluate(rank_test_all['rank_features'],
+            #                                         rank_test_all['rank_labels'],
+            #                                         'ranking')
+            # test_ranking_score_all = {k + '_all': v for k, v in test_ranking_score_all.items()}
+            # test_score.update(test_ranking_score_all)
+            # test_ranking_score_valid = model.evaluate(rank_test_valid['rank_features'],
+            #                                           rank_test_valid['rank_labels'],
+            #                                           'ranking')
+            # test_ranking_score_valid = {k + '_valid': v for k, v in
+            #                             test_ranking_score_valid.items()}
+            # test_score.update(test_ranking_score_valid)
             logging.info('Test Score={}'.format(test_score))
             with open(os.path.join(args.out_dir, 'test_scores.json'), 'w') as out_f:
                 json.dump(test_score, out_f)

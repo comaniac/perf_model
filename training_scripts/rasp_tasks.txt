@@ -1,0 +1,4 @@
+gcv_rasp4b_csv/conv2d_NCHWc.x86
+gcv_rasp4b_csv/dense_nopack.x86
+gcv_rasp4b_csv/dense_pack.x86
+gcv_rasp4b_csv/depthwise_conv2d_NCHWc.x86

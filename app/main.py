@@ -185,7 +185,9 @@ def tune_kernels(tasks,
 
         callbacks = []
         if task.name in ['dense_small_batch.cuda', 'conv2d_cudnn.cuda',
-                         'dense_cublas.cuda', 'dense_large_batch.cuda']:
+                         'dense_cublas.cuda', 'dense_large_batch.cuda',
+                         'conv2d_transpose_nchw.cuda',
+                         'dense_tensorcore.cuda']:
             # Ignore these four tasks
             continue
         if task.name not in measure_option['runner'].models:
