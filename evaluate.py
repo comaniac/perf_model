@@ -4,7 +4,7 @@ import os
 import json
 import numpy as np
 from perf_model.thrpt_model_new import NNRanker, read_pd, get_feature_label, CatRegressor,\
-    CatRanker, get_group_indices
+    CatRanker, get_group_indices, group_ndcg_score
 from scipy.stats import pearsonr, spearmanr
 from sklearn.metrics import ndcg_score
 
@@ -19,29 +19,28 @@ parser.add_argument('--correlation_out_name', default=None, type=str)
 args = parser.parse_args()
 
 
-def group_ndcg_score(truth, prediction, k=None, group_indices=None):
+
+def group_spearman_score(truth, prediction, group_indices=None):
     if group_indices is None:
-        return ndcg_score(truth, prediction, k=k)
+        spearman_score, _ = spearmanr(truth, prediction)
+        return spearman_score
     else:
-        avg_ndcg = 0
+        avg_spearman_score = 0
         cnt = 0
         for sel in group_indices:
-            sel_truth = truth[sel]
-            sel_prediction = prediction[sel]
             if len(sel) == 1:
-                pass
+                continue
             else:
-                try:
-                    group_ndcg = ndcg_score(np.expand_dims(sel_truth, axis=0),
-                                            np.expand_dims(sel_prediction, axis=0), k=k)
-                    avg_ndcg += group_ndcg
-                    cnt += 1
-                except Exception:
-                    print(sel_truth)
-                    print(sel_prediction)
-                    raise Exception
-        avg_ndcg /= cnt
-        return avg_ndcg
+                sel_truth = truth[sel]
+                sel_prediction = prediction[sel]
+                sel_spearman, _ = spearmanr(sel_truth, sel_prediction)
+                avg_spearman_score += sel_spearman
+                cnt += 1
+        if cnt == 0:
+            print(group_indices)
+            ch = input()
+        avg_spearman_score /= cnt
+        return avg_spearman_score
 
 
 correlation_dat = []
@@ -101,6 +100,9 @@ for dir_name in sorted(os.listdir(args.dir_path)):
             ndcg_group_avg_10 = group_ndcg_score(test_labels, test_scores,
                                                  k=10,
                                                  group_indices=group_indices)
+            # spearman_group_score = group_spearman_score(test_labels, test_scores,
+            #                                             group_indices=group_indices)
+            # print(spearman_group_score)
             pearson_score, _ = pearsonr(test_scores, test_labels)
             spearman_score, _ = spearmanr(test_scores, test_labels)
             noninvalid_pearson_score, _ = pearsonr(test_scores[valid_indices],

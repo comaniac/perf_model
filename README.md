@@ -61,11 +61,11 @@ aws s3 cp --recursive s3://xingjian-public/lorien/models/nn_regression_split1_-1
 aws s3 cp --recursive s3://xingjian-public/lorien/models/nn_regression_split1_-1_1000_512_3_0.1_1_20201002/ model_results/nn_regression_split1_-1_1000_512_3_0.1_1
 
 # Download the NN models trained by splitting on the op-level
-aws s3 cp --recursive s3://xingjian-public/lorien/models/nn_regression_op_split0.3_-1_1000_512_3_0.1_1_20201006/ model_results/nn_regression_op_split0.3_-1_1000_512_3_0.1_1
-aws s3 cp --recursive s3://xingjian-public/lorien/models/nn_regression_op_split0.5_-1_1000_512_3_0.1_1_20201006/ model_results/nn_regression_op_split0.5_-1_1000_512_3_0.1_1
-aws s3 cp --recursive s3://xingjian-public/lorien/models/nn_regression_op_split0.7_-1_1000_512_3_0.1_1_20201006/ model_results/nn_regression_op_split0.7_-1_1000_512_3_0.1_1
-aws s3 cp --recursive s3://xingjian-public/lorien/models/nn_regression_op_split1_-1_1000_512_3_0.1_1_20201006/ model_results/nn_regression_op_split1_-1_1000_512_3_0.1_1
-aws s3 cp --recursive s3://xingjian-public/lorien/models/nn_regression_op_split1_-1_1000_512_3_0.1_0_20201006/ model_results/nn_regression_op_split1_-1_1000_512_3_0.1_0
+aws s3 cp --recursive s3://xingjian-public/lorien/models/nn_regression_op_new_split0.3_-1_1000_512_3_0.1_1_20201008/ model_results/nn_regression_op_new_split0.3_-1_1000_512_3_0.1_1
+aws s3 cp --recursive s3://xingjian-public/lorien/models/nn_regression_op_new_split0.5_-1_1000_512_3_0.1_1_20201008/ model_results/nn_regression_op_new_split0.5_-1_1000_512_3_0.1_1
+aws s3 cp --recursive s3://xingjian-public/lorien/models/nn_regression_op_new_split0.7_-1_1000_512_3_0.1_1_20201008/ model_results/nn_regression_op_new_split0.7_-1_1000_512_3_0.1_1
+aws s3 cp --recursive s3://xingjian-public/lorien/models/nn_regression_op_new_split1_-1_1000_512_3_0.1_1_20201008/ model_results/nn_regression_op_new_split1_-1_1000_512_3_0.1_1
+aws s3 cp --recursive s3://xingjian-public/lorien/models/nn_regression_op_new_split1_-1_1000_512_3_0.1_0_20201008/ model_results/nn_regression_op_new_split1_-1_1000_512_3_0.1_0
 
 # Download CatBoost Regression + Ranking models with split
 aws s3 cp --recursive s3://xingjian-public/lorien/models/cat_regression_op_5000_split1_20201006 model_results/cat_regression_op_5000_split1

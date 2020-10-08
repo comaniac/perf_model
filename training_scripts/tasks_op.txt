@@ -1,11 +1,9 @@
 gcv_graviton2_csv/conv2d_NCHWc.x86
 gcv_graviton2_csv/conv2d_nchw_spatial_pack.arm_cpu
 gcv_graviton2_csv/conv2d_nchw_winograd.arm_cpu
-gcv_graviton2_csv/dense_nopack.x86
 gcv_graviton2_csv/depthwise_conv2d_NCHWc.x86
 gcv_graviton2_csv/depthwise_conv2d_nchw.arm_cpu
 gcv_skylake_csv/conv2d_NCHWc.x86
-gcv_skylake_csv/dense_nopack.x86
 gcv_skylake_csv/depthwise_conv2d_NCHWc.x86
 gcv_t4_csv/conv2d_nchw.cuda
 gcv_t4_csv/conv2d_nchw_winograd.cuda
@@ -14,5 +12,4 @@ gcv_v100_csv/conv2d_nchw.cuda
 gcv_v100_csv/conv2d_nchw_winograd.cuda
 gcv_v100_csv/depthwise_conv2d_nchw.cuda
 gcv_rasp4b_csv/conv2d_NCHWc.x86
-gcv_rasp4b_csv/dense_nopack.x86
 gcv_rasp4b_csv/depthwise_conv2d_NCHWc.x86

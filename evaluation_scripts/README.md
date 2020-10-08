@@ -281,3 +281,93 @@ do
 done;
 
 ```
+
+
+# Ablation Experiments
+
+
+## C4 Ablation
+```
+for model in nn_regression_op_new_split1_-1_1000_512_3_0.1_1 \
+             nn_regression_op_new_split0.7_-1_1000_512_3_0.1_1 \
+             nn_regression_op_new_split0.5_-1_1000_512_3_0.1_1 \
+             nn_regression_op_new_split0.3_-1_1000_512_3_0.1_1
+do
+    for seed in 123 1234 12345
+    do
+        for K in 2 8
+        do
+            bash evaluate_e2e.sh c4 ${model} nn $K $seed
+        done;
+    done;
+done;
+```
+
+## C5 Ablation
+```
+for model in nn_regression_op_new_split1_-1_1000_512_3_0.1_1 \
+             nn_regression_op_new_split0.7_-1_1000_512_3_0.1_1 \
+             nn_regression_op_new_split0.5_-1_1000_512_3_0.1_1 \
+             nn_regression_op_new_split0.3_-1_1000_512_3_0.1_1
+do
+    for seed in 123 1234 12345
+    do
+        for K in 2 8
+        do
+            bash evaluate_e2e.sh c5 ${model} nn $K $seed
+        done;
+    done;
+done;
+```
+
+## G4 Ablation
+```
+for model in nn_regression_op_new_split1_-1_1000_512_3_0.1_1 \
+             nn_regression_op_new_split0.7_-1_1000_512_3_0.1_1 \
+             nn_regression_op_new_split0.5_-1_1000_512_3_0.1_1 \
+             nn_regression_op_new_split0.3_-1_1000_512_3_0.1_1
+do
+    for seed in 123 1234 12345
+    do
+        for K in 2 8
+        do
+            bash evaluate_e2e.sh g4 ${model} nn $K $seed
+        done;
+    done;
+done;
+```
+
+## P3 Ablation
+```
+for model in nn_regression_op_new_split1_-1_1000_512_3_0.1_1 \
+             nn_regression_op_new_split0.7_-1_1000_512_3_0.1_1 \
+             nn_regression_op_new_split0.5_-1_1000_512_3_0.1_1 \
+             nn_regression_op_new_split0.3_-1_1000_512_3_0.1_1
+do
+    for seed in 123 1234 12345
+    do
+        for K in 2 8
+        do
+            bash evaluate_e2e.sh p3 ${model} nn $K $seed
+        done;
+    done;
+done;
+```
+
+
+## M6 Ablation
+```
+for model in nn_regression_op_new_split1_-1_1000_512_3_0.1_1 \
+             nn_regression_op_new_split0.7_-1_1000_512_3_0.1_1 \
+             nn_regression_op_new_split0.5_-1_1000_512_3_0.1_1 \
+             nn_regression_op_new_split0.3_-1_1000_512_3_0.1_1
+do
+    for seed in 123 1234 12345
+    do
+        for K in 2 8
+        do
+            bash evaluate_e2e.sh m6 ${model} nn $K $seed
+        done;
+    done;
+done;
+```

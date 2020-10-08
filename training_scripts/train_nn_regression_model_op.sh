@@ -17,7 +17,7 @@ export CUDA_VISIBLE_DEVICES=$((${cuda_device} % ${num_gpus}))
 
 TUNING_DATASET=../tuning_dataset
 data_prefix=../split_tuning_dataset_op/$task
-MODEL_DIR=../model_results/nn_regression_op_split${split_postfix}_${neg_mult}_${iter_mult}_${units}_${num_layers}_${dropout}_${use_gate}
+MODEL_DIR=../model_results/nn_regression_op_new_split${split_postfix}_${neg_mult}_${iter_mult}_${units}_${num_layers}_${dropout}_${use_gate}
 mkdir -p ${MODEL_DIR}
 python3 -m perf_model.thrpt_model_new \
     --algo nn \

@@ -261,6 +261,32 @@ def get_group_df(df):
     return group_dfs
 
 
+def group_ndcg_score(truth, prediction, k=None, group_indices=None):
+    if group_indices is None:
+        return ndcg_score(np.expand_dims(truth, axis=0),
+                          np.expand_dims(prediction, axis=0), k=k)
+    else:
+        avg_ndcg = 0
+        cnt = 0
+        for sel in group_indices:
+            sel_truth = truth[sel]
+            sel_prediction = prediction[sel]
+            if len(sel) == 1:
+                continue
+            else:
+                try:
+                    group_ndcg = ndcg_score(np.expand_dims(sel_truth, axis=0),
+                                            np.expand_dims(sel_prediction, axis=0), k=k)
+                    avg_ndcg += group_ndcg
+                    cnt += 1
+                except Exception:
+                    print(sel_truth)
+                    print(sel_prediction)
+                    raise Exception
+        avg_ndcg /= cnt
+        return avg_ndcg
+
+
 class CatRegressor:
     def __init__(self, model=None):
         self.model = model
@@ -453,19 +479,24 @@ class NNRanker:
 
     def fit(self, train_df, batch_size=256, group_size=10, lr=1E-2,
             iter_mult=500, rank_lambda=1.0, test_df=None, train_dir='.'):
-        features, labels = get_feature_label(train_df)
-        logging.info(f'#Train = {len(train_df)},'
-                     f' #Non-invalid Throughputs in Train = {len((labels >0).nonzero()[0])}')
         split_ratio = 0.05
-        train_num = int(np.ceil((1 - split_ratio) * len(features)))
-        perm = np.random.permutation(len(features))
-        train_features, train_labels = features[perm[:train_num]], labels[perm[:train_num]]
-        valid_features, valid_labels = features[perm[train_num:]], labels[perm[train_num:]]
-        features, labels = train_features, train_labels
+        train_df, valid_df, _ = split_df_by_op(train_df, seed=100, ratio=split_ratio)
+        if test_df is not None:
+            test_group_indices = get_group_indices(test_df)
+        # features, labels = get_feature_label(train_df)
+        # logging.info(f'#Train = {len(train_df)},'
+        #              f' #Non-invalid Throughputs in Train = {len((labels >0).nonzero()[0])}')
+        # train_num = int(np.ceil((1 - split_ratio) * len(features)))
+        # perm = np.random.permutation(len(features))
+        # train_features, train_labels = features[perm[:train_num]], labels[perm[:train_num]]
+        # valid_features, valid_labels = features[perm[train_num:]], labels[perm[train_num:]]
+        features, labels = get_feature_label(train_df)
+        valid_features, valid_labels = get_feature_label(valid_df)
+
         if test_df is not None:
             test_features, test_labels = get_feature_label(test_df)
         epoch_iters = (len(features) + batch_size - 1) // batch_size
-        log_interval = epoch_iters * iter_mult // 100
+        log_interval = epoch_iters * iter_mult // 500
         num_iters = epoch_iters * iter_mult
         if self.net is None:
             self._in_units = features.shape[1]
@@ -512,7 +543,7 @@ class NNRanker:
         epoch_iter = 0
         best_valid_rmse = np.inf
         no_better = 0
-        stop_patience = 30
+        stop_patience = 50
         for ranking_features, ranking_labels in dataloader:
             optimizer.zero_grad()
             ranking_features = ranking_features.cuda()
@@ -558,7 +589,8 @@ class NNRanker:
                     else:
                         no_better += 1
                     if test_df is not None:
-                        test_score = self.evaluate(test_features, test_labels, 'regression')
+                        test_score = self.evaluate(test_features, test_labels, 'regression',
+                                                   group_indices=test_group_indices)
                         logging.info(f'[{niter + 1}/{num_iters}], Test_score={test_score}')
             niter += 1
             epoch_iter += 1
@@ -624,7 +656,7 @@ class NNRanker:
                 all_preds.append(preds)
         return np.concatenate(all_preds, axis=0)
 
-    def evaluate(self, features, labels, mode='ranking'):
+    def evaluate(self, features, labels, mode='ranking', group_indices=None):
         preds = self.predict(features, use_gpu=True)
         if mode == 'regression':
             original_preds = preds
@@ -638,11 +670,17 @@ class NNRanker:
                                     np.expand_dims(original_preds, axis=0), k=2)
             ndcg_top_8 = ndcg_score(np.expand_dims(labels, axis=0),
                                     np.expand_dims(original_preds, axis=0), k=8)
+            group_ndcg_top2 = group_ndcg_score(labels, original_preds, k=2,
+                                               group_indices=group_indices)
+            group_ndcg_top8 = group_ndcg_score(labels, original_preds, k=8,
+                                               group_indices=group_indices)
             return {'rmse': rmse, 'mae': mae,
                     'valid_rmse': valid_rmse, 'valid_mae': valid_mae,
                     'invalid_acc': np.sum((original_preds <= 0) * (labels <= 0)) / len(preds),
                     'ndcg_top_2': ndcg_top_2,
-                    'ndcg_top_8': ndcg_top_8}
+                    'ndcg_top_8': ndcg_top_8,
+                    'group_ndcg_top2': group_ndcg_top2,
+                    'group_ndcg_top8': group_ndcg_top8}
         elif mode == 'ranking':
             # We calculate two things, the NDCG score and the MRR score.
             ndcg_val = ndcg_score(y_true=labels, y_score=preds)
@@ -896,8 +934,10 @@ def main():
                       test_df=test_df,
                       train_dir=args.out_dir)
             model.save(args.out_dir)
+            test_group_indices = get_group_indices(test_df)
             test_features, test_labels = get_feature_label(test_df)
-            test_score = model.evaluate(test_features, test_labels, 'regression')
+            test_score = model.evaluate(test_features, test_labels, 'regression',
+                                        group_indices=test_group_indices)
             # test_ranking_score_all = model.evaluate(rank_test_all['rank_features'],
             #                                         rank_test_all['rank_labels'],
             #                                         'ranking')
