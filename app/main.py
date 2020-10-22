@@ -62,9 +62,12 @@ def create_config():
 
     model_group = parser.add_mutually_exclusive_group(required=True)
     model_group.add_argument('--gcv', help='model name in gluon cv model zoo')
+    model_group.add_argument('--mx', help='MXNet model')
     model_group.add_argument('--tf', help='TensorFlow model')
     model_group.add_argument('--pt', help='PyTorch model')
     model_group.add_argument('--test', help='Model name in Relay testing')
+
+    parser.add_argument('--sche', help='Schedule file')
 
     return parser.parse_args()
 
@@ -103,6 +106,43 @@ def get_relay_test_model(name):
         raise ValueError("Unsupported network: " + name)
 
     return mod, params, ('data', input_shape)
+
+
+def get_mxnet_model(model_name):
+    """Parse MNXet graph.
+        Args:
+            model_name(str): the network artifact directory.
+            dshape(list): the list of shapes for the input data.
+            dtype(str): the data type of the input data.
+            flush_denormal(bool): the flag to control whether flush the denormal number or not.
+        Returns:
+            tvm module: the tvm network.
+            tvm parameter dictionary: the corresponding parameter dictionary of the network.
+    """
+    import mxnet as mx
+    sm = mx.sym.load('{}-symbol.json'.format(model_name))
+    dtype = 'float32'
+    shape = (1, 3, 112, 112)
+    mx_input = mx.sym.var('data')
+    tvm_input = {'data': shape}
+    #if len(dshape) == 1:
+    #    mx_input = mx.sym.var('data')
+    #    tvm_input = {'data': dshape[0]}
+    #else:
+    #    mx_input, tvm_input = [], {}
+    #    for i in range(len(dshape)):
+    #        tvm_input['data{}'.format(i)] = dshape[i]
+    #        mx_input.append(mx.sym.var('data{}'.format(i)))
+    sym = mx.gluon.SymbolBlock(sm, mx_input)
+    sym.hybridize()
+    sym.collect_params().load('{}-0000.params'.format(model_name))
+    #if flush_denormal:
+    #    flush_denormal_numbers(sym)
+    mod, params = relay.frontend.from_mxnet(sym, tvm_input, dtype=dtype)
+    net = mod["main"]
+    net = relay.Function(net.params, net.body, None, net.type_params, net.attrs)
+    mod = tvm.IRModule.from_expr(net)
+    return mod, params, ('data', shape)
 
 
 def get_gcv_model(model_name):
@@ -256,7 +296,7 @@ def tune_and_evaluate(mod, params, input_shape, dtype, measure_top_n, target, tu
     if graph_log_file is not None and not os.path.exists(graph_log_file):
         tune_kernels(tasks, True, measure_top_n, **tuning_opt)
         tune_graph(mod["main"], input_shape[1], target, tuning_opt['log_filename'], graph_log_file)
-    else:
+    elif not os.path.exists(tuning_opt['log_filename']):
         tune_kernels(tasks, False, measure_top_n, **tuning_opt)
 
     dispatch_ctx = tvm.autotvm.task.DispatchContext.current
@@ -331,6 +371,8 @@ def main():
         mod, params, input_shape = get_tf_model(configs.tf)
     elif configs.pt:
         mod, params, input_shape = get_pt_model(configs.pt)
+    elif configs.mx:
+        mod, params, input_shape = get_mxnet_model(configs.mx)
     else:
         mod, params, input_shape = get_relay_test_model(configs.test)
 
@@ -361,7 +403,7 @@ def main():
                                verify_model_accuracy=verify_model,
                                **measure_option))
     tuning_option = {
-        'log_filename': 'tune.log',
+        'log_filename': 'tune.log' if not configs.sche else configs.sche,
         'tuner': 'round',
         'early_stopping': None,
         'n_trial': configs.n_trial,

@@ -1,3 +1,4 @@
+import tqdm
 import glob
 import heapq
 import math
@@ -111,7 +112,7 @@ def run_one_wkl(platform1_log, platform2_dirs):
 
     return
 
-for config_file in glob.glob('{}/*.json'.format(platform1_dir)):
+for config_file in tqdm.tqdm(glob.glob('{}/*.json'.format(platform1_dir))):
     run_one_wkl(config_file, platform2_dirs)
 
 with open('out.log', 'w') as filep:

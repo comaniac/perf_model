@@ -23,6 +23,7 @@ platform1_dir = sys.argv[1]
 platform2_dir = sys.argv[2]
 
 log_target = sys.argv[3]
+target = tvm.target.create(log_target)
 
 wkls = {}
 
@@ -43,7 +44,7 @@ def parse_one_log(best_config_log, new_log_dir):
             continue
     
         # Only focus on the best N configs.
-        new_inp = MeasureInput(target=log_target, task=inp.task, config=inp.config)
+        new_inp = MeasureInput(target=target, task=inp.task, config=inp.config)
         if len(wkls[target_wkl][1]) < top_n_cfgs:
             heapq.heappush(wkls[target_wkl][1], (-np.mean(res.costs), new_inp))
         elif np.mean(res.costs) < -wkls[target_wkl][1][0][0]:
