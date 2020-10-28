@@ -241,12 +241,16 @@ def tune_and_evaluate(
     tvm.autotvm.task.DispatchContext.current = autotvm.apply_history_best(
         tuning_opt["log_filename"]
     )
-    #sys.stderr.write("Compile model with fallback + tophub...\n")
 
     compile_engine.get().clear()
     with relay.build_config(opt_level=3):
         lib = relay.build_module.build(mod, target=target, params=params)
     tvm.autotvm.task.DispatchContext.current = dispatch_ctx
+
+    sys.stderr.write("Compile baseline model...\n")
+    compile_engine.get().clear()
+    with relay.build_config(opt_level=3):
+        base_lib = relay.build_module.build(mod, target=target, params=params)
 
     ref_lib = None
     if os.path.exists(ref_log_filename):
@@ -262,6 +266,10 @@ def tune_and_evaluate(
     data_tvm = {}
     for name, shape in inputs.items():
         data_tvm[name] = tvm.nd.array((np.random.uniform(size=shape)).astype(dtype))
+
+    # Evaluate baseline module
+    sys.stderr.write("Baseline\n")
+    evaluate(base_lib, ctx, data_tvm, dtype)
 
     # Evaluate reference module
     if ref_lib:
@@ -292,7 +300,7 @@ def main():
         assert configs.mx in model_shape_dict, "Model not found: {}".format(configs.mx)
         models = [configs.mx]
     else:
-        models = list(model_shape_dict.keys())[3:]
+        models = list(model_shape_dict.keys())[5:6]
 
     for model in models:
         sys.stderr.write("%s\n" % model)
